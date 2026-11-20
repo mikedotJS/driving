@@ -31,7 +31,7 @@ rampage en boîte automatique, immobilité parfaite à l'arrêt, rappel du volan
 ## 2. Le volant Logitech G923
 
 Aucun volant n'était branché à la machine de développement. La chaîne complète est donc vérifiée
-avec un **G923 émulé** (`tests/volant.test.ts`, 10 tests) :
+avec un **G923 émulé** (`tests/volant.test.ts`, 16 tests) :
 
 - un faux périphérique *Gamepad* : reconnaissance du volant, direction 1:1 sur 900°, pédales
   (repos à +1, zone morte), palettes, levier en H, assistant de calibration quel que soit l'ordre des
@@ -64,8 +64,19 @@ Un niveau positif (octet supérieur à `80`, force HID++ positive) est donc une 
 droite, qui pousse le volant vers la gauche ; pour pousser à droite, le jeu envoie un octet inférieur
 à `80` ou une force HID++ négative. C'est son réglage par défaut pour les deux versions du G923.
 
-**Ce qui reste invérifiable sans matériel** : que le volant suive bien cette convention (d'où le
-bouton « Tester », qui demande de quel côté il est parti et inverse le sens s'il le faut),
+**Le jeu vérifie lui-même sur votre volant.** Faute de pouvoir essayer un G923 ici, la vérification a
+été confiée au jeu : le bouton « Vérifier » (*Volant et commandes*) envoie une poussée d'une demi-seconde
+vers la droite tout en lisant la position du volant. S'il part à droite, le sens est confirmé ; s'il part
+à gauche, le sens est inversé et une seconde poussée le confirme ; s'il ne bouge pas (volant tenu,
+moteur non alimenté) ou si sa position est illisible, le jeu le dit et pose la question à l'utilisateur.
+La date de la vérification est conservée et affichée. `tests/volant.test.ts` exerce ces cas avec un
+volant factice qui tourne sous l'effet des trames reçues — dans le sens prévu, dans le sens contraire,
+ou pas du tout — pour les deux protocoles (6 tests). `tools/essais/volant-navigateur.cjs` rejoue le
+parcours complet dans le navigateur, sur la version compilée : réglages, connexion, bouton « Vérifier »,
+avec un G923 simulé dans la page ; le jeu y annonce « parti de 93° vers la droite », ou, sur un volant
+simulé au sens inversé, corrige le sens puis le reconfirme.
+
+**Ce qui reste à constater sur le matériel** : le résultat de cette vérification sur un vrai G923,
 l'acceptation par le navigateur du rapport `30` de changement de mode, et le ressenti.
 
 ## 3. Le Code de la route

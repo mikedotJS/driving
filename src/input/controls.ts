@@ -171,6 +171,18 @@ export class Controls {
     this.saveProfile();
   }
 
+  /**
+   * Angle du volant en degrés, positif à droite, lu directement sur le périphérique (utilisable hors
+   * conduite, dans les menus). `null` s'il n'y a pas de volant.
+   */
+  wheelAngle(): number | null {
+    const pad = this.pad, p = this.profile;
+    if (!pad || !p || this.state.device !== 'wheel') return null;
+    const raw = pad.axes[p.steer.index] ?? 0;
+    const mid = (p.steer.left + p.steer.right) / 2, half = (p.steer.right - p.steer.left) / 2 || 1;
+    return (clamp((raw - mid) / half, -1, 1) * p.rangeDeg) / 2;
+  }
+
   /** Lecture brute des axes (pour l'assistant de calibration). */
   rawAxes(): number[] { return this.pad ? Array.from(this.pad.axes) : []; }
   rawButtons(): boolean[] { return this.pad ? this.pad.buttons.map((b) => b.pressed) : []; }

@@ -22,10 +22,14 @@
 // droite, qui pousse le volant vers la gauche ; pour pousser à droite on envoie un octet inférieur à
 // 0x80 (ou une force HID++ négative). C'est le sens retenu ici par défaut pour les deux protocoles.
 // Cette déduction n'a pas pu être confirmée sur un volant réel depuis l'environnement de développement
-// (le document du constructeur n'est plus en ligne) : le test « le volant doit partir à droite » et
-// l'option d'inversion restent là pour cela.
+// (le document du constructeur n'est plus en ligne). Le jeu la vérifie donc lui-même sur le volant de
+// l'utilisateur : `selfTest` envoie une poussée vers la droite en lisant la position du volant, et
+// inverse le sens s'il est parti à gauche. L'option d'inversion manuelle reste disponible.
 
 import { clamp } from '../core/math';
+
+/** Issue de la vérification du retour de force sur le volant (voir ForceFeedback.selfTest). */
+export type SelfTest = 'ok' | 'corrige' | 'immobile' | 'illisible' | 'incoherent';
 
 const LOGITECH = 0x046d;
 // identifiants produit → protocole
@@ -41,6 +45,8 @@ export interface FfbSettings {
   invert: boolean;
   /** amortissement logiciel 0..1 */
   damping: number;
+  /** sens de l'effort constaté sur le volant lui-même (date de la vérification), sinon absent */
+  verified?: string;
 }
 
 export class ForceFeedback {
@@ -247,6 +253,58 @@ export class ForceFeedback {
     });
     this.settings.enabled = g;
   }
+  /**
+   * Vérification sur le volant lui-même : une poussée « vers la droite » est envoyée pendant qu'on lit sa
+   * position. Le retour de force est ainsi constaté sur le matériel de l'utilisateur, sans rien lui
+   * demander : s'il part à gauche, le sens est inversé puis vérifié par une seconde poussée.
+   * `angle` donne la position du volant en degrés, positive à droite (null si elle n'est pas lisible).
+   */
+  async selfTest(angle: () => number | null): Promise<{ result: SelfTest; degrees: number }> {
+    if (!this.connected) return { result: 'immobile', degrees: 0 };
+    // cadencé par une minuterie et non par l'affichage : la mesure ne doit pas dépendre de la fluidité du menu
+    const raf = (f: () => void) => setTimeout(f, 16);
+    const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const enabled = this.settings.enabled;
+    this.settings.enabled = true;
+    // poussée d'une demi-seconde ; on retient le plus grand écart du volant par rapport à son point de départ
+    const pulse = async (): Promise<number | null> => {
+      const a0 = angle();
+      if (a0 === null) return null;
+      let peak = 0;
+      const t0 = performance.now();
+      await new Promise<void>((resolve) => {
+        const tick = () => {
+          const t = (performance.now() - t0) / 1000;
+          const a = angle();
+          if (a !== null && Math.abs(a - a0) > Math.abs(peak)) peak = a - a0;
+          if (t > 0.6) { this.setForceNow(0); resolve(); return; }
+          this.setForceNow(0.45 * Math.sin((Math.PI * t) / 0.6));
+          raf(tick);
+        };
+        tick();
+      });
+      return peak;
+    };
+    const MOVED = 1.5; // degrés : en deçà, le volant n'a pas bougé (tenu en main, ou moteur inactif)
+    let out: { result: SelfTest; degrees: number };
+    const d = await pulse();
+    if (d === null) out = { result: 'illisible', degrees: 0 };
+    else if (Math.abs(d) < MOVED) out = { result: 'immobile', degrees: d };
+    else if (d > 0) out = { result: 'ok', degrees: d };
+    else {
+      // parti à gauche : on inverse, on laisse le volant se poser, et on vérifie
+      this.settings.invert = !this.settings.invert;
+      await wait(350);
+      const d2 = await pulse();
+      if (d2 !== null && d2 > MOVED) out = { result: 'corrige', degrees: d2 };
+      else { this.settings.invert = !this.settings.invert; out = { result: 'incoherent', degrees: d2 ?? 0 }; }
+    }
+    this.settings.enabled = enabled;
+    if (out.result === 'ok' || out.result === 'corrige') this.settings.verified = new Date().toISOString().slice(0, 10);
+    this.saveSettings();
+    return out;
+  }
+
   private setForceNow(f: number) { this.last = 0; this.lastSent = 999; this.setForce(f / Math.max(0.05, this.settings.gain)); }
 }
 

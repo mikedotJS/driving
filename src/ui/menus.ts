@@ -133,12 +133,13 @@ export class Menus {
       field('Levier de vitesses en H (Driving Force Shifter)', 'Décochez pour changer de rapport avec les palettes au volant.', check(s.hShifter, (v) => { s.hShifter = v; })),
       field('Sensibilité de la pédale de frein', 'La pédale du G923 est très ferme : augmentez si le freinage vous semble trop dur à doser.',
         range(s.brakeGamma, 0.5, 1.5, 0.05, (v) => { s.brakeGamma = v; }, (v) => (v < 0.95 ? 'forte' : v > 1.05 ? 'douce' : 'normale'))),
-      field('Retour de force', 'Connexion directe au volant par WebHID. Expérimental : n’a pas pu être essayé sur un volant réel — commencez avec une force modérée.',
+      field('Retour de force', 'Connexion directe au volant par WebHID. Après la connexion, cliquez sur « Vérifier » : le jeu contrôle lui-même sur votre volant qu’il répond, et dans le bon sens. Commencez avec une force modérée.',
         h('span', { class: 'row' },
           h('button', { class: 'btn', onclick: async () => { await ffb.connect(); this.settings('volant', back); } }, ffb.connected ? 'Reconnecter' : 'Connecter le volant…'),
-          h('button', { class: 'btn', disabled: !ffb.connected, onclick: async () => { await ffb.test(); this.ffbDirection(() => this.settings('volant', back)); } }, 'Tester'))),
+          h('button', { class: 'btn', disabled: !ffb.connected, onclick: () => { void this.ffbSelfTest(() => this.settings('volant', back)); } }, 'Vérifier'))),
+      ffb.settings.verified ? h('p', { class: 'note' }, `Sens de l’effort vérifié sur ce volant le ${ffb.settings.verified.split('-').reverse().join('/')}.`) : null,
       ffb.lastError ? h('p', { class: 'note', style: 'color:#ffb0b0' }, ffb.lastError) : null,
-      field('Force', 'Après « Tester », le jeu vous demande de quel côté le volant est parti et règle le sens tout seul.',
+      field('Force', 'Pendant la vérification, le jeu lit la position du volant et règle le sens de l’effort tout seul.',
         range(ffb.settings.gain, 0, 1, 0.05, (v) => { ffb.settings.gain = v; ffb.saveSettings(); }, (v) => `${Math.round(v * 100)} %`)),
       field('Inverser le sens du retour de force', '', check(ffb.settings.invert, (v) => { ffb.settings.invert = v; ffb.saveSettings(); })),
       field('Amortissement', 'Stabilise le volant en ligne droite.', range(ffb.settings.damping, 0, 1, 0.05, (v) => { ffb.settings.damping = v; ffb.saveSettings(); }, (v) => `${Math.round(v * 100)} %`)),
@@ -272,11 +273,43 @@ export class Menus {
   }
 
   // ───────────────────────── aide ─────────────────────────
-  /** Après l'impulsion de test : de quel côté le volant est-il parti ? Le sens du retour de force se règle en conséquence. */
-  ffbDirection(back: () => void) {
+  /**
+   * Vérification automatique du retour de force : le jeu pousse le volant vers la droite en lisant sa
+   * position, et inverse le sens s'il est parti à gauche. Si la position n'est pas lisible ou si le volant
+   * n'a pas bougé, on retombe sur la question posée à l'utilisateur.
+   */
+  async ffbSelfTest(back: () => void) {
+    const ffb = this.host.ffb, controls = this.host.controls;
+    this.mount(h('div', { class: 'menu panel narrow' },
+      h('h2', null, 'Vérification du retour de force'),
+      h('p', { class: 'sub' }, 'Lâchez le volant : il va recevoir une ou deux poussées d’une demi-seconde.')));
+    await new Promise((r) => setTimeout(r, 1500));
+    const r = await ffb.selfTest(() => controls.wheelAngle());
+    const deg = `${Math.max(1, Math.round(Math.abs(r.degrees)))}°`;
+    if (r.result === 'ok') {
+      this.report('Retour de force vérifié', [
+        `Le volant est parti de ${deg} vers la droite, comme demandé : sur votre volant, le sens de l’effort est le bon.`,
+        'Rien à régler.',
+      ], back);
+    } else if (r.result === 'corrige') {
+      this.report('Retour de force vérifié', [
+        'À la première poussée, le volant est parti vers la gauche : le sens de l’effort a été inversé automatiquement.',
+        `À la seconde, il est bien parti de ${deg} vers la droite.`,
+      ], back);
+    } else {
+      this.ffbDirection(back, r.result === 'immobile' ? 'Le jeu n’a pas vu le volant bouger — vous le teniez peut-être. Une nouvelle poussée vient d’être envoyée.'
+        : r.result === 'illisible' ? 'Le jeu ne parvient pas à lire la position de ce volant. Une nouvelle poussée vient d’être envoyée.'
+        : 'Le volant est parti à gauche même après inversion. Une nouvelle poussée vient d’être envoyée.');
+      await ffb.test();
+    }
+  }
+
+  /** Question posée quand la vérification automatique n'a pas pu conclure : de quel côté le volant est-il parti ? */
+  ffbDirection(back: () => void, note = '') {
     const ffb = this.host.ffb;
     this.mount(h('div', { class: 'menu panel narrow' },
       h('h2', null, 'Test du retour de force'),
+      note ? h('p', { class: 'note' }, note) : null,
       h('p', { class: 'sub' }, 'Le volant vient de recevoir une poussée d’une demi-seconde. De quel côté est-il parti ?'),
       h('div', { class: 'grid' },
         h('button', { class: 'card', onclick: () => back() }, h('h3', null, 'Vers la droite'), h('p', null, 'C’est le bon sens : rien à changer.')),

@@ -2,7 +2,9 @@
 // WebHID factices). Les trames de retour de force attendues sont celles des pilotes Linux, dont le code
 // source a été relu le 20 novembre 2026 : new-lg4ff (berarma) pour le G923 PlayStation/PC — le pilote
 // officiel hid-lg4ff.c ne connaît pas ce volant —, hid-logitech-hidpp.c pour le G923 Xbox.
-// Rien n'a été essayé sur un vrai volant : le sens de l'effort, notamment, n'est indiqué par aucun pilote.
+// Rien n'a été essayé sur un vrai volant : le sens de l'effort, notamment, n'est écrit dans aucun pilote.
+// Le jeu le constate donc lui-même sur le volant de l'utilisateur (ForceFeedback.selfTest), ce que le
+// dernier groupe d'essais vérifie avec un volant factice qui tourne sous l'effet des trames reçues.
 import { describe, it, expect, beforeEach } from 'vitest';
 
 // ── faux environnement de navigateur ──
@@ -231,5 +233,113 @@ describe('Logitech G923 émulé : retour de force', () => {
     const ffb = new ForceFeedback();
     expect(await ffb.connect()).toBe(false);
     expect(ffb.connected).toBe(false);
+  });
+});
+
+// ── vérification automatique du retour de force ──
+// Le volant factice réagit ici physiquement aux trames reçues : son axe de direction tourne sous l'effort,
+// dans le sens prévu (« conforme »), dans le sens contraire (« inversé »), ou pas du tout (volant tenu en
+// main, moteur inactif). C'est ce que le jeu observera sur un vrai volant.
+function reactiveWheel(productId: number, reportId: number, pad: any, polarity: 1 | -1 | 0) {
+  const { dev, sent } = fakeHid(productId, reportId);
+  const send = dev.sendReport;
+  dev.sendReport = async (id: number, data: Uint8Array) => {
+    await send(id, data);
+    let right = 0; // effort vers la droite, -1..1, selon la convention déduite des pilotes
+    if (id === 0x11) {
+      if (data[2] !== 0x21) return;
+      const v = (data[9] << 8) | data[10];
+      right = -(v > 0x7fff ? v - 0x10000 : v) / 32767; // HID++ : force négative = vers la droite
+    } else if (data[0] === 0x11 || data[0] === 0x1c) right = (0x80 - data[2]) / 127; // classique : octet < 0x80 = vers la droite
+    else return;
+    pad.axes[0] = Math.max(-1, Math.min(1, pad.axes[0] + right * polarity * 0.02));
+  };
+  return { dev, sent };
+}
+
+describe('Logitech G923 émulé : vérification automatique du retour de force', () => {
+  let controls: Controls, pad: any;
+  beforeEach(() => {
+    store.clear();
+    pad = fakePad();
+    pads = [pad];
+    controls = new Controls(new EventTarget() as unknown as Window);
+    controls.update(1 / 60);
+  });
+
+  it('la position du volant se lit en degrés, hors conduite', () => {
+    expect(controls.wheelAngle()).toBeCloseTo(0, 5);
+    pad.axes[0] = 0.2;
+    expect(controls.wheelAngle()).toBeCloseTo(90, 3); // 0,2 × 450°
+    controls.enabled = false; // dans les menus
+    pad.axes[0] = -0.1;
+    expect(controls.wheelAngle()).toBeCloseTo(-45, 3);
+  });
+
+  it('volant conforme (protocole classique) : parti à droite, sens confirmé sans rien changer', async () => {
+    const { dev } = reactiveWheel(0xc266, 0, pad, 1);
+    hidDevices = [dev];
+    const ffb = new ForceFeedback();
+    expect(await ffb.connect()).toBe(true);
+    ffb.settings.gain = 0.7; ffb.settings.invert = false;
+    const r = await ffb.selfTest(() => controls.wheelAngle());
+    expect(r.result).toBe('ok');
+    expect(r.degrees).toBeGreaterThan(5);
+    expect(ffb.settings.invert).toBe(false);
+    expect(ffb.settings.verified).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('volant au sens inversé (protocole classique) : détecté, corrigé, puis vérifié par une seconde poussée', async () => {
+    const { dev, sent } = reactiveWheel(0xc266, 0, pad, -1);
+    hidDevices = [dev];
+    const ffb = new ForceFeedback();
+    expect(await ffb.connect()).toBe(true);
+    ffb.settings.gain = 0.7; ffb.settings.invert = false;
+    const r = await ffb.selfTest(() => controls.wheelAngle());
+    expect(r.result).toBe('corrige');
+    expect(r.degrees).toBeGreaterThan(5);
+    expect(ffb.settings.invert).toBe(true);
+    // désormais, « vers la droite » s'envoie de l'autre côté du neutre — celui qui, sur ce volant, tourne à droite
+    await tick(20);
+    ffb.settings.enabled = true;
+    const before = pad.axes[0];
+    ffb.setForce(0.5);
+    await tick(20);
+    expect(sent[sent.length - 1].data[2]).toBeGreaterThan(0x80);
+    expect(pad.axes[0]).toBeGreaterThan(before);
+  });
+
+  it('volant au sens inversé (G923 Xbox, protocole HID++) : même correction', async () => {
+    const { dev } = reactiveWheel(0xc26e, 0x11, pad, -1);
+    hidDevices = [dev];
+    const ffb = new ForceFeedback();
+    expect(await ffb.connect()).toBe(true);
+    expect(ffb.protocol).toBe('hidpp');
+    ffb.settings.gain = 0.7; ffb.settings.invert = false;
+    const r = await ffb.selfTest(() => controls.wheelAngle());
+    expect(r.result).toBe('corrige');
+    expect(ffb.settings.invert).toBe(true);
+  });
+
+  it('volant tenu en main ou moteur inactif : rien n’est modifié, le jeu le signale', async () => {
+    const { dev } = reactiveWheel(0xc266, 0, pad, 0);
+    hidDevices = [dev];
+    const ffb = new ForceFeedback();
+    expect(await ffb.connect()).toBe(true);
+    ffb.settings.invert = false;
+    const r = await ffb.selfTest(() => controls.wheelAngle());
+    expect(r.result).toBe('immobile');
+    expect(ffb.settings.invert).toBe(false);
+    expect(ffb.settings.verified).toBeUndefined();
+  });
+
+  it('position du volant illisible : pas de conclusion, la question sera posée à l’utilisateur', async () => {
+    const { dev } = reactiveWheel(0xc266, 0, pad, 1);
+    hidDevices = [dev];
+    const ffb = new ForceFeedback();
+    expect(await ffb.connect()).toBe(true);
+    const r = await ffb.selfTest(() => null);
+    expect(r.result).toBe('illisible');
+    expect(ffb.settings.verified).toBeUndefined();
   });
 });

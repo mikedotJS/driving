@@ -26,7 +26,8 @@ Pour une version optimisée : `npm run build` puis `npm run preview`.
 4. *Boîte de vitesses* : « Manuelle » utilise la **pédale d'embrayage** (point de patinage, calage) ;
    cochez « Levier en H » si vous avez le Driving Force Shifter, sinon les palettes changent de rapport.
 5. **Retour de force** (facultatif) : *Connecter le volant…* ouvre la fenêtre WebHID du navigateur.
-   Cliquez sur *Tester* : le jeu vous demande de quel côté le volant est parti et règle le sens tout seul.
+   Cliquez sur *Vérifier* et lâchez le volant : le jeu lui envoie une poussée vers la droite, lit sa
+   position, et constate lui-même qu'il répond dans le bon sens — sinon il inverse le sens et revérifie.
 6. **Fluidité** : *Réglages → Mesurer la fluidité* fait conduire le moniteur 20 secondes et affiche la
    cadence d'images de votre machine, le nom de la carte graphique et un conseil de réglage. Pour
    repère : sur un Mac M1 virtualisé (GPU modeste), la même mesure donne environ 41 images/s en 1080p
@@ -41,8 +42,9 @@ Pour une version optimisée : `npm run build` puis `npm run preview`.
 > nouveau sur *Connecter le volant*. Le **sens** de l'effort retenu par défaut est celui que donnent,
 > mises bout à bout, les conventions de SDL, du noyau Linux et de ces pilotes (octet inférieur à 0x80 =
 > effort vers la droite ; détail en tête de `src/input/ffb.ts`) — aucun texte ne l'énonce directement
-> et il reste à confirmer sur le matériel, comme le ressenti : le bouton *Tester* et la case
-> « Inverser » servent à cela ; commencez avec une force modérée. Sans retour de force, le volant
+> et il reste à confirmer sur le matériel, comme le ressenti. C'est le jeu qui s'en charge sur votre
+> volant : le bouton *Vérifier* envoie une poussée, lit la position du volant et corrige le sens s'il
+> le faut (la case « Inverser » reste disponible) ; commencez avec une force modérée. Sans retour de force, le volant
 > fonctionne avec le ressort de centrage de G HUB.
 
 Sans volant, le jeu se pilote au clavier (AZERTY) ou à la manette — voir *Commandes et aide*.
@@ -141,7 +143,7 @@ src/
   game/, ui/        leçons, examen, démonstration (pilote automatique), réglages, écrans
 tests/            tests (physique et réalisme, volant émulé, barème, réseau, circulation, règles, pilote automatique)
 tools/essais/     diagnostics : trace d'un trajet, chevauchements, plan de dessus d'un carrefour, balayage,
-                  contrôle des leçons dans le navigateur
+                  contrôle des leçons et du volant (simulé) dans le navigateur, mesure de fluidité
 tools/voix/       répliques du moniteur : textes, lots, découpage des enregistrements
 dev/              pages de mise au point de modules isolés
 ```
