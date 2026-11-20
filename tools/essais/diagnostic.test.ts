@@ -34,7 +34,7 @@ it('diagnostic', () => {
   const ctx = () => {
     const seg = A.segs[A.k];
     const pr = seg.line.project(player.car.x, player.car.z);
-    return `t=${t.toFixed(1)} v=${player.car.speedKmh.toFixed(0)}km/h seg=${A.k}${seg.link ? `(liaison ${seg.link.turn} ${seg.link.from.edge.name}→${seg.link.to.edge.name}, R≈${(1 / Math.max(1e-3, Math.abs(seg.line.curvatureAt(pr.s, 2)))).toFixed(1)}m, larg. sortie ${seg.link.to.edge.width})` : `(voie ${seg.lane.edge.name} larg ${seg.lane.width} off ${seg.lane.off.toFixed(1)} demi-chaussée ${seg.lane.edge.half.toFixed(1)})`} s=${pr.s.toFixed(1)}/${seg.line.length.toFixed(1)} écart=${pr.d.toFixed(2)} volant=${input.steer.toFixed(2)} gaz=${input.throttle.toFixed(2)} frein=${input.brake.toFixed(2)} rapport=${player.car.gear} rpm=${player.car.rpm.toFixed(0)} raison=${ap.debug}`;
+    return `t=${t.toFixed(1)} v=${player.car.speedKmh.toFixed(0)}km/h seg=${A.k}${seg.link ? `(liaison ${seg.link.turn} ${seg.link.from.edge.name}→${seg.link.to.edge.name}, R≈${(1 / Math.max(1e-3, Math.abs(seg.line.curvatureAt(pr.s, 2)))).toFixed(1)}m, larg. sortie ${seg.link.to.edge.width})` : seg.lane ? `(voie ${seg.lane.edge.name} larg ${seg.lane.width} off ${seg.lane.off.toFixed(1)} demi-chaussée ${seg.lane.edge.half.toFixed(1)})` : '(changement de file)'} s=${pr.s.toFixed(1)}/${seg.line.length.toFixed(1)} écart=${pr.d.toFixed(2)} volant=${input.steer.toFixed(2)} gaz=${input.throttle.toFixed(2)} frein=${input.brake.toFixed(2)} rapport=${player.car.gear} rpm=${player.car.rpm.toFixed(0)} raison=${ap.debug}`;
   };
   let t = 0;
   player.events.collision = (kind, speed) => {
@@ -54,6 +54,13 @@ it('diagnostic', () => {
   while (t < 600 && !ap.done && out.length < +(process.env.MAX ?? 40)) {
     if (process.env.TRACE && t > +process.env.TRACE && t < +process.env.TRACE + +(process.env.DUR ?? 12) && trace++ % +(process.env.EVERY ?? 60) === 0) {
       out.push('TRACE ' + ctx());
+      if (process.env.CEDER) {
+        const sg = A.segs[A.k], nx = A.segs[A.k + 1];
+        if (sg.lane && nx?.link) {
+          const end = sg.lane.endRef, link = nx.link;
+          out.push(`   céder ? ${A.mustYield(sg.lane, link, 3, player.car.vx)} ctl=${end.control} conflits=${link.conflicts.length} : ` + traffic.vehicles.filter((o) => Math.hypot(o.x - player.car.x, o.z - player.car.z) < 45).map((o) => o.link ? `${o.id}: liaison sommet ${o.link.vertex.id} (nôtre ${link.vertex.id}) via→${o.link.to.to.id} long ${o.link.to.line.length.toFixed(1)} conflitVia=${o.link.to.links.some((l: any) => link.conflicts.includes(l) || l.to === link.to)} prio=${traffic.hasPriorityOver(o.link.to.endRef, null, end, link, -end.dx, -end.dz)}` : `${o.id}: voie→${o.lane!.to.id} next conflit=${!!o.next && (link.conflicts.includes(o.next) || o.next.to === link.to)}`).join(' | '));
+        }
+      }
       if (process.env.VOISINS) {
         const T = traffic as any;
         const pi = rules.playerInfo({ car: player.car, indicator: player.indicator, hazards: false, seatbelt: true, lights: false, handbrake: false, horn: false, lookLeftAt: -99, lookRightAt: -99, lookBackAt: -99, night: false });

@@ -305,6 +305,12 @@ export const INFRACTIONS = {
     moniteur: 'Accident ! Vous avez percuté un autre véhicule.',
     regle: 'Distances de sécurité, anticipation et vitesse adaptée évitent la quasi-totalité des collisions en ville.',
   }),
+  collision_cycliste: I({
+    id: 'collision_cycliste', titre: 'Cycliste renversé', article: 'R414-4', classe: 4, amende: 135, points: 6, suspension: true,
+    severity: 'grave', competence: 'partage', cooldown: 4,
+    moniteur: 'Vous avez renversé un cycliste. Dans la réalité, ce serait dramatique.',
+    regle: 'Le cycliste est un usager vulnérable : on ne le dépasse qu’avec 1 m d’écart en ville, et on vérifie l’angle mort avant de tourner à droite. Blesser un usager par imprudence est un délit.',
+  }),
   collision_pieton: I({
     id: 'collision_pieton', titre: 'Piéton renversé', article: 'R415-11', classe: 4, amende: 135, points: 6, suspension: true,
     severity: 'grave', competence: 'partage', cooldown: 4,

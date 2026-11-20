@@ -203,7 +203,7 @@ export class Game implements MenuHost {
     };
     const P = this.player;
     P.events.collision = (kind, speed) => {
-      const id = kind === 'pieton' ? 'collision_pieton' : kind === 'vehicule' ? 'collision_vehicule' : 'collision';
+      const id = kind === 'pieton' ? 'collision_pieton' : kind === 'cycliste' ? 'collision_cycliste' : kind === 'vehicule' ? 'collision_vehicule' : 'collision';
       this.rules.report(id, P.car, `choc à ${Math.round(speed * 3.6)} km/h`);
       if (this.audioReady) this.audio.play('crash', clamp(speed / 8, 0.25, 1));
       this.ffbModel.jolt(clamp(speed / 6, 0.2, 0.9), Math.random() < 0.5 ? 1 : -1);

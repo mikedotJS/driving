@@ -3,13 +3,14 @@
 // aucune faute — et à la démonstration par le moniteur.
 
 import type { Car } from '../vehicle/car';
-import type { Lane, LaneLink, RoadNet } from '../map/roadnet';
-import type { Polyline } from '../map/polyline';
+import type { Edge, Lane, LaneLink, RoadNet } from '../map/roadnet';
+import { Polyline, bezierLink } from '../map/polyline';
 import type { Route } from '../map/route';
 import type { Traffic } from '../traffic/traffic';
 import { clamp, wrapAngle } from '../core/math';
 
-interface Seg { line: Polyline; lane: Lane | null; link: LaneLink | null; step: number }
+/** `offset` : abscisse du début du segment sur la voie quand il n'en couvre que la fin (après un changement de file) */
+interface Seg { line: Polyline; lane: Lane | null; link: LaneLink | null; step: number; offset?: number; change?: { edge: Edge; side: -1 | 1 } }
 export interface AutoCommand { steer: number; throttle: number; brake: number; indicator: -1 | 0 | 1; done: boolean }
 
 const FRONT = 1.85;
@@ -22,6 +23,8 @@ export class Autopilot {
   private waitTime = 0;
   private yellow = new Map<object, boolean>();
   done = false;
+  /** changements de file en section courante prévus sur l'itinéraire */
+  laneChanges = 0;
   /** vitesse de croisière en dessous de la limite (km/h) */
   margin = 3;
   debug = '';
@@ -29,25 +32,50 @@ export class Autopilot {
   constructor(private net: RoadNet, private traffic: Traffic | null, readonly route: Route) {
     const steps = route.steps;
     let forced: Lane | null = null;
+    const lanesOf = (i: number) => (steps[i].dir > 0 ? steps[i].edge.lanesF : steps[i].edge.lanesB);
+    /** liaisons de la voie `l` (étape i) vers l'étape i+1 */
+    const linksAt = (l: Lane, i: number) => (steps[i + 1] ? l.links.filter((x) => x.to.edge === steps[i + 1].edge && x.to.dir === steps[i + 1].dir) : []);
+    /** la voie d'arrivée permet-elle de poursuivre vers l'étape suivante sans changer de file ? */
+    const continues = (k: LaneLink, i: number) => !steps[i + 2] || linksAt(k.to, i + 1).length > 0;
     for (let i = 0; i < steps.length; i++) {
-      const st = steps[i];
-      const lanes = st.dir > 0 ? st.edge.lanesF : st.edge.lanesB;
+      const lanes = lanesOf(i);
       if (!lanes.length) break;
       const next = steps[i + 1];
-      const links = (l: Lane) => (next ? l.links.filter((x) => x.to.edge === next.edge && x.to.dir === next.dir) : []);
-      // voie : celle imposée par la liaison précédente si elle mène à la suite, sinon la plus à droite qui convient
-      let lane = forced && (!next || links(forced).length) ? forced : null;
+      // voie : celle imposée par la liaison précédente si elle mène à la suite ; sinon la plus à droite
+      // qui convient, de préférence une file qui évite un changement de voie au tronçon suivant
+      let lane = forced && (!next || linksAt(forced, i).length) ? forced : null;
       if (!lane) {
         const order = lanes.slice().reverse();
-        lane = (next ? order.find((l) => links(l).length) : order[0]) ?? order[0];
+        lane = (next ? order.find((l) => linksAt(l, i).some((k) => continues(k, i))) ?? order.find((l) => linksAt(l, i).length) : order[0]) ?? order[0];
+        // changement de file en section courante : raccord progressif plutôt qu'un saut latéral
+        if (forced && forced !== lane && forced.edge === lane.edge) {
+          const L = forced.line.length, s0 = Math.min(6, L * 0.2), s1 = Math.min(L * 0.75, s0 + 32);
+          const a = forced.line.at(s0), bEnd = lane.line.at(Math.min(lane.line.length, s1));
+          const pts: number[] = [];
+          for (let q = 0; q <= s0; q += 2) { const p = forced.line.at(q); pts.push(p.x, p.z); }
+          const bz = bezierLink(a.x, a.z, a.tx, a.tz, bEnd.x, bEnd.z, bEnd.tx, bEnd.tz, 1.5);
+          for (let q = 0; q < bz.n; q++) pts.push(bz.pts[q * 2], bz.pts[q * 2 + 1]);
+          this.segs.push({ line: new Polyline(pts), lane: null, link: null, step: i, change: { edge: lane.edge, side: lane.index > forced.index ? 1 : -1 } });
+          this.segs.push({ line: lane.line.slice(Math.min(lane.line.length, s1), lane.line.length), lane, link: null, step: i, offset: Math.min(lane.line.length, s1) });
+          this.laneChanges++;
+          forced = null;
+          if (next) {
+            const ls = linksAt(lane, i);
+            if (!ls.length) break;
+            const link = ls.sort((p, q) => +continues(q, i) - +continues(p, i) || q.to.index - p.to.index)[0];
+            this.segs.push({ line: link.line, lane: null, link, step: i });
+            forced = link.to;
+          }
+          continue;
+        }
       }
       this.segs.push({ line: lane.line, lane, link: null, step: i });
       forced = null;
       if (next) {
-        const ls = links(lane);
+        const ls = linksAt(lane, i);
         if (!ls.length) break;
-        // on vise la voie de droite à l'arrivée
-        const link = ls.sort((a, b) => b.to.index - a.to.index)[0];
+        // on vise une voie d'arrivée d'où l'on pourra poursuivre, la plus à droite possible
+        const link = ls.sort((p, q) => +continues(q, i) - +continues(p, i) || q.to.index - p.to.index)[0];
         this.segs.push({ line: link.line, lane: null, link, step: i });
         forced = link.to;
       }
@@ -57,7 +85,7 @@ export class Autopilot {
   /** Abscisse de fin sur le dernier segment. */
   private get endS(): number {
     const last = this.segs[this.segs.length - 1];
-    return last && last.lane ? clamp(last.lane.fromEdgeS(last.lane.dir > 0 ? this.route.endS : last.lane.edge.length - this.route.endS), 5, last.line.length - 2) : 0;
+    return last && last.lane ? clamp(last.lane.fromEdgeS(last.lane.dir > 0 ? this.route.endS : last.lane.edge.length - this.route.endS) - (last.offset ?? 0), 5, last.line.length - 2) : 0;
   }
 
   /** Point situé à la distance d devant la position suivie. */
@@ -100,7 +128,8 @@ export class Autopilot {
     cmd.steer = clamp(delta / ((car.spec.maxSteerDeg * Math.PI) / 180), -1, 1);
 
     // ── vitesse cible ──
-    const edge = seg.lane ? seg.lane.edge : seg.link!.to.edge;
+    const edgeOf = (g: Seg): Edge => (g.lane ? g.lane.edge : g.link ? g.link.to.edge : g.change!.edge);
+    const edge = edgeOf(seg);
     let vt = Math.max(8, edge.limit - this.margin) / 3.6;
     // virages à venir
     for (let d = -3; d < 34; d += 2.5) {
@@ -123,8 +152,9 @@ export class Autopilot {
       const sg = this.segs[i];
       if (sg.lane) {
         const lane = sg.lane;
+        const off = sg.offset ?? 0;
         for (const sp of lane.stops) {
-          const d = acc + sp.s;
+          const d = acc + sp.s - off;
           if (d < -1.5 || d > 75) continue;
           if (sp.kind === 'signal' && sp.controller) {
             const st = sp.controller.state(sp.group ?? 0, time);
@@ -162,14 +192,16 @@ export class Autopilot {
         const nextSeg = this.segs[i + 1];
         if (nextSeg && nextSeg.link) {
           const end = lane.endRef;
-          const dLine = acc + lane.fromEdgeS(end.sAt(end.stopDist));
-          const dEnd = acc + lane.line.length;
+          const dLine = acc + lane.fromEdgeS(end.sAt(end.stopDist)) - off;
+          const dEnd = acc + sg.line.length;
           if (dEnd < 60 && end.vertex.ends.length >= 3) {
             const link = nextSeg.link;
             // on aborde tout carrefour à allure modérée quand on n'a pas un feu vert
             const green = end.control === 'signal' && end.controller && end.controller.state(end.group, time) === 'green';
             if (!green && dLine > -1) vt = Math.min(vt, Math.sqrt(3.3 * 3.3 + 2 * 1.3 * Math.max(0, dLine - 2)));
-            if (this.mustYield(lane, link, dLine, v) && dLine > -1.2) stopAt(Math.max(0, dLine - 0.5), 'priorité');
+            // ligne déjà franchie (ligne reculée) : on peut encore s'arrêter à l'embouchure du carrefour
+            const dHold = dLine > -1.2 ? dLine - 0.5 : dEnd - 0.8;
+            if (dHold > -1.0 && this.mustYield(lane, link, Math.max(0, dHold), v)) stopAt(Math.max(0, dHold), 'priorité');
           }
         }
       }
@@ -185,7 +217,7 @@ export class Autopilot {
       }
       // limitation plus basse à venir : on arrive déjà à la bonne vitesse
       if (i > this.k) {
-        const lim = Math.max(8, (sg.lane ? sg.lane.edge : sg.link!.to.edge).limit - this.margin) / 3.6;
+        const lim = Math.max(8, edgeOf(sg).limit - this.margin) / 3.6;
         if (lim < vt) vt = Math.min(vt, Math.sqrt(lim * lim + 2 * 1.2 * Math.max(0, acc - 4)));
       }
       acc += sg.line.length;
@@ -223,6 +255,7 @@ export class Autopilot {
     let dist = -this.s;
     for (let i = this.k; i < Math.min(this.segs.length, this.k + 5) && dist < 32; i++) {
       const sg = this.segs[i];
+      if (sg.change) { cmd.indicator = sg.change.side; break; }
       if (sg.link && sg.link.vertex.ends.length >= 3) {
         // manœuvre presque terminée : on annonce déjà la suivante (carrefours enchaînés)
         const finishing = i === this.k && this.s > sg.line.length * 0.6;
@@ -257,11 +290,22 @@ export class Autopilot {
     const inX = -end.dx, inZ = -end.dz;
     const myEta = Math.max(0, dLine) / Math.max(1.5, v);
     if (myEta > 6) return false;
+    // créneau nécessaire : le temps de dégager le carrefour (plus long pour un tourne-à-gauche)
+    const need = clamp(link.line.length / 3.2 + 2.5, 4.5, 8.5);
     for (const o of tr.vehicles) {
       if (o.link) {
         if (o.link.vertex === link.vertex && (link.conflicts.includes(o.link) || o.link.to === link.to)) {
           if (this.waitTime > 20 && o.v < 0.2) continue;
           return true;
+        }
+        // véhicule encore dans le carrefour précédent, qui débouche sur le nôtre par un tronçon court
+        const via = o.link.to;
+        if (via.to === link.vertex && via !== lane && via.line.length < 40 && via.links.some((l) => link.conflicts.includes(l) || l.to === link.to)) {
+          const oEnd = via.endRef;
+          if (oEnd.control === 'signal' && oEnd.controller && oEnd.controller.state(oEnd.group, tr.time) !== 'green') continue;
+          if (!tr.hasPriorityOver(oEnd, null, end, link, inX, inZ)) continue;
+          const od = o.link.line.length - o.s + via.line.length;
+          if (od / Math.max(2, o.v) < need && !(this.waitTime > 20 && o.v < 0.2)) return true;
         }
         continue;
       }
@@ -272,7 +316,7 @@ export class Autopilot {
       if (!tr.hasPriorityOver(oEnd, o.next, end, link, inX, inZ)) continue;
       const od = o.lane.line.length - o.s;
       const eta = od / Math.max(2, o.v);
-      if (od < 10 || eta < 4.5) {
+      if (od < 10 || eta < need) {
         if (this.waitTime > 20 && o.v < 0.2) continue;
         return true;
       }
@@ -307,6 +351,9 @@ export class Autopilot {
       const fx = Math.sin(o.heading), fz = -Math.cos(o.heading), r = o.width / 2 + 0.1;
       for (const k of [-0.32, 0, 0.32]) test(o.x + fx * o.length * k, o.z + fz * o.length * k, r);
     }
+    // cyclistes : on ne dépasse que si l'on peut laisser un mètre, sinon on reste derrière (R414-4)
+    what = 'cycliste';
+    for (const b of tr.cyclists) if (!b.hit) test(b.x, b.z, 1.25);
     what = 'piéton sur la chaussée';
     // piétons : large marge pour ceux qui traversent ; ceux qui attendent sur le trottoir ne comptent que s'ils sont vraiment sur la trajectoire
     for (const p of tr.pedestrians) if (!p.hit) test(p.x, p.z, p.state === 'cross' ? 0.9 : 0.02);

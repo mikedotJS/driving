@@ -7,6 +7,7 @@
 
 import type { Crossing, EdgeEnd, Lane, LaneLink, RoadNet, Vertex } from '../map/roadnet';
 import { clamp, Rng } from '../core/math';
+import { Polyline } from '../map/polyline';
 
 export type VehicleKind = 'citadine' | 'berline' | 'suv' | 'utilitaire' | 'bus';
 const KIND_LEN: Record<VehicleKind, number> = { citadine: 4.05, berline: 4.6, suv: 4.4, utilitaire: 4.9, bus: 12 };
@@ -52,6 +53,8 @@ export class Vehicle {
   /** temps passé arrêté derrière une carrosserie détectée par le filet géométrique */
   netWait = 0;
   crashed = 0;
+  wasHit = false;
+  hitTime = 0;
   alive = true;
   /** phase de roue pour le rendu */
   wheelPhase = 0;
@@ -85,11 +88,33 @@ export class Pedestrian {
 
 const IDM = { a: 1.7, b: 2.4, T: 1.25, s0: 2.2 };
 
-export interface TrafficOptions { vehicles: number; pedestrians: number; seed: number }
+/** Cycliste sur bande cyclable : avance à son allure, s'arrête aux feux et laisse passer les piétons. */
+export class Cyclist {
+  id = 0;
+  seed = 0;
+  lane!: Lane;
+  /** raccord en ligne droite à travers un carrefour, vers la bande cyclable d'en face */
+  conn: Polyline | null = null;
+  nextLane: Lane | null = null;
+  /** abscisse de la roue avant sur l'élément courant */
+  s = 0;
+  v = 0;
+  cruise = 5;
+  x = 0; z = 0; heading = 0;
+  phase = 0;
+  lean = 0;
+  wait = 0;
+  hit = false;
+  alive = true;
+  readonly length = 1.8;
+}
+
+export interface TrafficOptions { vehicles: number; pedestrians: number; cyclists: number; seed: number }
 
 export class Traffic {
   vehicles: Vehicle[] = [];
   pedestrians: Pedestrian[] = [];
+  cyclists: Cyclist[] = [];
   time = 0;
   private rng: Rng;
   private byLane = new Map<Lane, Vehicle[]>();
@@ -97,15 +122,18 @@ export class Traffic {
   private nextId = 1;
   private spawnTimer = 0;
   private pedTimer = 0;
+  private cycTimer = 0;
+  private cycleLanes: Lane[] = [];
   private drivable: Lane[];
   opts: TrafficOptions;
   /** événements à destination des règles */
   onForcedBrake?: (v: Vehicle) => void;
 
   constructor(readonly net: RoadNet, opts: Partial<TrafficOptions> = {}) {
-    this.opts = { vehicles: 34, pedestrians: 26, seed: 7, ...opts };
+    this.opts = { vehicles: 34, pedestrians: 26, cyclists: 5, seed: 7, ...opts };
     this.rng = new Rng(this.opts.seed);
     this.drivable = net.lanes.filter((l) => l.kind === 'L' && l.line.length > 12 && l.links.length > 0);
+    this.cycleLanes = net.lanes.filter((l) => l.kind === 'C' && l.line.length > 35);
   }
 
   // ───────────── boucle ─────────────
@@ -114,6 +142,8 @@ export class Traffic {
     this.index();
     for (const v of this.vehicles) this.stepVehicle(v, dt, player);
     for (const p of this.pedestrians) this.stepPedestrian(p, dt, player);
+    for (const c of this.cyclists) this.stepCyclist(c, dt, player);
+    this.cyclists = this.cyclists.filter((c) => c.alive);
     this.vehicles = this.vehicles.filter((v) => v.alive);
     this.pedestrians = this.pedestrians.filter((p) => p.alive);
     if (player) {
@@ -121,6 +151,8 @@ export class Traffic {
       if (this.spawnTimer <= 0) { this.spawnTimer = 0.25; this.populate(player); }
       this.pedTimer -= dt;
       if (this.pedTimer <= 0) { this.pedTimer = 0.5; this.populatePedestrians(player); }
+      this.cycTimer -= dt;
+      if (this.cycTimer <= 0) { this.cycTimer = 1.2; this.populateCyclists(player); }
     }
   }
 
@@ -204,7 +236,14 @@ export class Traffic {
 
   // ───────────── conduite ─────────────
   private stepVehicle(v: Vehicle, dt: number, player: PlayerInfo | null) {
-    if (v.crashed > 0) { v.crashed -= dt; v.v = 0; v.a = 0; v.braking = true; return; }
+    if (v.crashed > 0) { v.crashed -= dt; v.v = 0; v.a = 0; v.braking = true; v.wasHit = true; return; }
+    // après un accrochage avec le joueur : si les deux restent imbriqués, le véhicule finit par être évacué
+    if (v.wasHit && player) {
+      const near = Math.hypot(player.x - v.x, player.z - v.z) < (v.length + player.length) / 2 + 1.5;
+      v.hitTime = near && v.v < 0.3 ? v.hitTime + dt : 0;
+      if (!near && v.v > 2) v.wasHit = false;
+      if (v.hitTime > 12) { v.alive = false; return; }
+    }
     const L = v.path;
     const remaining = L.length - v.s;
     const limit = (v.lane ?? v.link!.to).edge.limit / 3.6;
@@ -520,6 +559,107 @@ export class Traffic {
       return this.hasPriorityOver(pe, null, end, link, inX, inZ) && p.approachDist < 6;
     }
     return this.hasPriorityOver(pe, null, end, link, inX, inZ);
+  }
+
+  // ───────────── cyclistes ─────────────
+  private populateCyclists(player: PlayerInfo) {
+    for (const c of this.cyclists) if (Math.hypot(c.x - player.x, c.z - player.z) > 200) c.alive = false;
+    if (this.cyclists.length >= this.opts.cyclists || !this.cycleLanes.length) return;
+    const near: Lane[] = [];
+    for (const l of this.cycleLanes) {
+      const p = l.line.at(2);
+      const d = Math.hypot(p.x - player.x, p.z - player.z);
+      if (d > 50 && d < 170) near.push(l);
+    }
+    if (!near.length) return;
+    const lane = this.rng.pick(near);
+    if (this.cyclists.some((c) => c.lane === lane && c.s < 25)) return;
+    const c = new Cyclist();
+    c.id = this.nextId++;
+    c.seed = (this.rng.next() * 1e9) | 0;
+    c.lane = lane; c.s = 2;
+    c.cruise = this.rng.range(3.9, 5.8); // 14 à 21 km/h
+    c.v = c.cruise;
+    c.nextLane = this.nextCycleLane(lane);
+    this.placeCyclist(c);
+    this.cyclists.push(c);
+  }
+
+  /** Bande cyclable qui prolonge celle-ci, en face, de l'autre côté du carrefour. */
+  private nextCycleLane(lane: Lane): Lane | null {
+    const V = lane.endRef.vertex;
+    const a = lane.line.at(lane.line.length);
+    let best: Lane | null = null, bd = 0.6;
+    for (const o of this.cycleLanes) {
+      if (o === lane || o.startRef.vertex !== V || o.edge === lane.edge) continue;
+      const b = o.line.at(0);
+      const dev = Math.abs(Math.atan2(a.tx * b.tz - a.tz * b.tx, a.tx * b.tx + a.tz * b.tz));
+      // en face : dans l'axe, et pas trop décalé latéralement
+      const lat = Math.abs((b.x - a.x) * -a.tz + (b.z - a.z) * a.tx);
+      if (dev < bd && lat < 4 && Math.hypot(b.x - a.x, b.z - a.z) < 60) { bd = dev; best = o; }
+    }
+    return best;
+  }
+
+  private placeCyclist(c: Cyclist) {
+    const L = c.conn ?? c.lane.line;
+    const p = L.at(c.s - c.length / 2);
+    c.x = p.x; c.z = p.z;
+    c.heading = Math.atan2(p.tx, -p.tz);
+  }
+
+  private stepCyclist(c: Cyclist, dt: number, player: PlayerInfo | null) {
+    if (c.hit) { c.v = 0; c.wait += dt; if (c.wait > 6) c.alive = false; return; }
+    const L = c.conn ?? c.lane.line;
+    const rem = L.length - c.s;
+    let stop = Infinity;
+    if (!c.conn) {
+      const lane = c.lane;
+      // piétons engagés sur un passage devant
+      for (const cr of lane.edge.crossings) {
+        const d = lane.fromEdgeS(cr.s) - cr.halfLen - 1 - c.s;
+        if (d < -1 || d > 25) continue;
+        if (this.pedestrians.some((p) => p.crossing === cr && p.state === 'cross')) stop = Math.min(stop, Math.max(0, d));
+      }
+      // autre cycliste devant
+      for (const o of this.cyclists) if (o !== c && !o.conn && o.lane === lane && o.s > c.s) stop = Math.min(stop, o.s - o.length - c.s - 1.5);
+      // carrefour au bout de la bande
+      const end = lane.endRef;
+      if (end.vertex.ends.length >= 3) {
+        const dEnd = Math.max(0, rem - 2.5);
+        let hold = false;
+        if (end.control === 'signal' && end.controller) hold = end.controller.state(end.group, this.time) !== 'green';
+        else if (rem < 14 && c.wait < 9) {
+          // sans feu : on passe quand rien ne bouge dans le carrefour
+          const V = end.vertex;
+          for (const o of this.vehicles) if (o.v > 1 && ((o.link && o.link.vertex === V) || (o.lane && o.lane.to === V && o.lane.line.length - o.s < 12 && o.lane.edge !== lane.edge))) { hold = true; break; }
+          if (player && player.inJunction === V && Math.abs(player.speed) > 1) hold = true;
+        }
+        if (hold) stop = Math.min(stop, dEnd);
+      }
+    }
+    // la voiture du joueur en travers de la bande
+    if (player) {
+      const pr = L.project(player.x, player.z);
+      const d = pr.s - c.s - player.length / 2;
+      if (Math.abs(pr.d) < 1.3 && d > -0.5 && d < 10 && pr.s < L.length - 0.01) stop = Math.min(stop, Math.max(0, d - 1));
+    }
+    let vt = c.cruise;
+    if (stop < Infinity) vt = Math.min(vt, Math.sqrt(2 * 1.6 * Math.max(0, stop - 0.3)));
+    if (!c.conn && c.lane.endRef.vertex.ends.length >= 3 && rem < 10) vt = Math.min(vt, 3.2); // on aborde le carrefour au ralenti
+    c.v = Math.max(0, c.v + clamp((vt - c.v) * 1.5, -3.5, 0.9) * dt);
+    if (c.v < 0.05 && vt < 0.1) { c.v = 0; c.wait += dt; } else if (c.v > 1) c.wait = 0;
+    const ds = c.v * dt;
+    c.s += ds; c.phase += ds;
+    c.lean = clamp(L.curvatureAt(c.s, 3) * c.v * c.v / 9.81, -0.3, 0.3);
+    if (c.s >= L.length) {
+      if (c.conn) { c.lane = c.nextLane!; c.conn = null; c.s = 0.01; c.nextLane = this.nextCycleLane(c.lane); }
+      else if (c.nextLane) {
+        const a = L.at(L.length), b = c.nextLane.line.at(0);
+        c.conn = new Polyline([a.x, a.z, b.x, b.z]); c.s = 0.01;
+      } else { c.alive = false; return; } // la bande s'arrête : le cycliste quitte la simulation
+    }
+    this.placeCyclist(c);
   }
 
   // ───────────── piétons ─────────────

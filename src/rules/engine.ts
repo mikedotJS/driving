@@ -448,6 +448,27 @@ export class RulesEngine {
     } else if (backOut || this.time - en.t > 40) this.entry = null;
   }
 
+  /** Dépassement d'un cycliste : au moins 1 m d'écart latéral en agglomération (R414-4). */
+  private checkCyclists(car: Car) {
+    if (!this.traffic || car.vx < 2.5) return;
+    const S = car.spec;
+    const fx = car.forwardX, fz = car.forwardZ;
+    // centre géométrique de la carrosserie
+    const shift = S.cgToFront + S.frontOverhang - S.length / 2;
+    const ox = car.x + fx * shift, oz = car.z + fz * shift;
+    for (const c of this.traffic.cyclists) {
+      if (c.hit) continue;
+      const rx = c.x - ox, rz = c.z - oz;
+      const along = rx * fx + rz * fz, lat = rx * -fz + rz * fx;
+      if (Math.abs(along) > S.length / 2 + 0.9) continue;
+      // même sens de marche, et on le dépasse vraiment
+      const cos = Math.sin(c.heading) * fx - Math.cos(c.heading) * fz;
+      if (cos < 0.7 || car.vx - c.v * cos < 1.2) continue;
+      const gap = Math.abs(lat) - S.width / 2 - 0.32;
+      if (gap < 1.0 && gap > -0.1) this.report('depassement_cycliste', car, `écart ${Math.max(0, gap).toFixed(1).replace('.', ',')} m`);
+    }
+  }
+
   /** Le joueur se trouve-t-il dans le couloir de `o`, juste devant lui ? (il lui coupe la route) */
   private closing(car: Car, o: Vehicle): boolean {
     const rx = car.x - o.x, rz = car.z - o.z;
@@ -605,6 +626,7 @@ export class RulesEngine {
 
   // ───────────────────────── divers ─────────────────────────
   private checkMisc(dt: number, car: Car, p: PlayerState, speed: number, kmh: number, sit: Situation) {
+    this.checkCyclists(car);
     if (!p.seatbelt && kmh > 4) { this.beltTime += dt; if (this.beltTime > 1.2) { this.report('ceinture', car); this.beltTime = 0; } } else this.beltTime = 0;
     if (p.handbrake && kmh > 6 && car.throttleEff > 0.15) { this.hbTime += dt; if (this.hbTime > 1.5) { this.report('frein_main', car); this.hbTime = 0; } } else this.hbTime = 0;
     if (p.night && !p.lights && kmh > 5) { this.lightsTime += dt; if (this.lightsTime > 3) { this.report('feux', car); this.lightsTime = 0; } } else this.lightsTime = 0;

@@ -12,7 +12,7 @@ import { clamp } from '../core/math';
 export interface StaticBox { x: number; z: number; heading: number; halfLen: number; halfWid: number }
 
 export interface PlayerEvents {
-  collision?: (kind: 'decor' | 'vehicule' | 'pieton' | 'poteau', speed: number) => void;
+  collision?: (kind: 'decor' | 'vehicule' | 'pieton' | 'cycliste' | 'poteau', speed: number) => void;
   kerb?: (wheel: number, up: boolean, speed: number) => void;
   message?: (text: string) => void;
   horn?: (on: boolean) => void;
@@ -190,11 +190,16 @@ export class Player {
         if (Math.abs(p.x - c.x) > 4 || Math.abs(p.z - c.z) > 4) continue;
         this.circle(p.x, p.z, 0.28, Math.sin(p.heading) * p.speed, -Math.cos(p.heading) * p.speed, 'pieton', p);
       }
+      for (const b of this.traffic.cyclists) {
+        if (b.hit) continue;
+        if (Math.abs(b.x - c.x) > 5 || Math.abs(b.z - c.z) > 5) continue;
+        this.circle(b.x, b.z, 0.42, Math.sin(b.heading) * b.v, -Math.cos(b.heading) * b.v, 'cycliste', b);
+      }
     }
   }
 
   /** Cercle (poteau, piéton) contre le rectangle de la voiture. */
-  private circle(px: number, pz: number, r: number, vx: number, vz: number, kind: 'poteau' | 'pieton', ped?: Pedestrian) {
+  private circle(px: number, pz: number, r: number, vx: number, vz: number, kind: 'poteau' | 'pieton' | 'cycliste', ped?: { hit: boolean }) {
     const c = this.car, S = c.spec;
     const halfLen = S.length / 2, halfWid = S.width / 2;
     const shift = S.cgToFront + S.frontOverhang - halfLen;
@@ -216,12 +221,12 @@ export class Player {
     const nlx = -dx / d, nly = -dy / d;
     const nx = nlx * fx + nly * rx, nz = nlx * fz + nly * rz;
     const cx = ox + qx * fx + qy * rx, cz = oz + qx * fz + qy * rz;
-    if (kind === 'pieton' && ped) {
+    if (kind !== 'poteau' && ped) {
       // seule une voiture en mouvement renverse un piéton (un piéton qui frôle une voiture arrêtée ne compte pas)
       const [pvx, pvz] = c.pointVelocity(cx, cz);
       const own = Math.hypot(pvx, pvz);
       const closing = -((pvx - vx) * nx + (pvz - vz) * nz);
-      if (own > 0.7 && closing > 0.5) { ped.hit = true; this.hit('pieton', own); }
+      if (own > 0.7 && closing > 0.5) { ped.hit = true; this.hit(kind, own); }
       return; // un piéton n'arrête pas la voiture
     }
     this.resolve(nx, nz, depth, cx, cz, vx, vz, 'poteau');
@@ -279,7 +284,7 @@ export class Player {
     return impact;
   }
 
-  private hit(kind: 'decor' | 'vehicule' | 'pieton' | 'poteau', speed: number) {
+  private hit(kind: 'decor' | 'vehicule' | 'pieton' | 'cycliste' | 'poteau', speed: number) {
     if (this.time - this.lastHit < 0.5 && kind !== 'pieton') return;
     this.lastHit = this.time;
     this.events.collision?.(kind, speed);

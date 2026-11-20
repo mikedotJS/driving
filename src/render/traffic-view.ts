@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { createCarVisual, CAR_COLORS, type CarVisual } from './car-model';
-import { PedestrianCrowd } from './people';
+import { PedestrianCrowd, createCyclist, type RiderVisual } from './people';
 import type { Traffic, Vehicle, Pedestrian } from '../traffic/traffic';
 import { KERB_HEIGHT } from '../world/ground';
 import type { Ground } from '../world/ground';
@@ -17,6 +17,8 @@ export class TrafficView {
   private pedIndex = new Map<number, number>();
   private pedHit = new Map<number, number>();
   private blink = 0;
+  private riders = new Map<number, RiderVisual>();
+  private riderPool: RiderVisual[] = [];
 
   constructor(private traffic: Traffic, private ground: Ground, capacity = 96) {
     this.crowd = new PedestrianCrowd(capacity);
@@ -56,6 +58,30 @@ export class TrafficView {
       this.group.remove(s.visual.group);
       (this.pool[s.vehicle!.kind] ??= []).push(s.visual);
       this.slots.delete(id);
+    }
+
+    // cyclistes
+    const riding = new Set<number>();
+    for (const c of this.traffic.cyclists) {
+      riding.add(c.id);
+      let r = this.riders.get(c.id);
+      if (!r) {
+        r = this.riderPool.pop() ?? createCyclist(c.seed);
+        r.group.rotation.order = 'YXZ';
+        r.group.traverse((o) => { o.castShadow = true; });
+        this.riders.set(c.id, r);
+        this.group.add(r.group);
+      }
+      r.group.position.set(c.x, 0, c.z);
+      // renversé : le vélo est couché sur le côté
+      r.group.rotation.set(0, -c.heading, c.hit ? 1.4 : 0);
+      if (!c.hit) r.update(c.phase, c.v, c.lean);
+    }
+    for (const [id, r] of this.riders) {
+      if (riding.has(id)) continue;
+      this.group.remove(r.group);
+      this.riderPool.push(r);
+      this.riders.delete(id);
     }
 
     // piétons

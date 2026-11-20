@@ -458,7 +458,8 @@ export class RoadNet {
         let stop = end.trim + 0.4;
         for (const c of e.crossings) {
           const dc = end.atA ? c.s : e.length - c.s;
-          if (dc < end.trim + 16) stop = Math.max(stop, dc + c.halfLen + 1.2);
+          // (un passage situé vers l'autre bout d'un tronçon court appartient au carrefour précédent)
+          if (dc < end.trim + 16 && dc < e.length * 0.6) stop = Math.max(stop, dc + c.halfLen + 1.2);
         }
         // ligne reculée d'après la position du panneau dans OSM — sauf sur un tronçon court, où elle
         // se retrouverait à la sortie du carrefour précédent
