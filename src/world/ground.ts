@@ -69,6 +69,12 @@ export class Ground {
   /** Hauteur du sol : 0 sur la chaussée, hauteur de bordure ailleurs. */
   height(x: number, z: number): number { return this.isRoad(x, z) ? 0 : KERB_HEIGHT; }
 
+  /** Une caisse de voiture centrée en (x, z), orientée selon (fx, fz), toucherait-elle un mur, une façade, une haie ? */
+  bodyHits(x: number, z: number, fx: number, fz: number, halfLen = 2.13, halfWid = 1.02): boolean {
+    for (const s of this.segmentsNear(x, z, halfLen + 1.5)) if (boxVsSegment(x, z, fx, fz, halfLen, halfWid, 0, s)) return true;
+    return false;
+  }
+
   /** Obstacles fixes dont la boîte englobante touche le disque (x, z, r). */
   segmentsNear(x: number, z: number, r: number, out: Segment[] = []): Segment[] {
     out.length = 0;

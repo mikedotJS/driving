@@ -17,7 +17,7 @@ it('plan', () => {
   const theme: Theme = (process.env.THEME as Theme) ?? 'pietons';
   const seed = +(process.env.SEED ?? 3), target = +(process.env.SEG ?? 5);
   const pose = START_STREETS[theme].map((n) => startOnStreet(net, n, 0.25)).find(Boolean)!;
-  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z)) === 0; })!;
+  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z), (x, z, fx, fz) => ground.bodyHits(x, z, fx, fz)) === 0; })!;
   const ap = new Autopilot(net, null, route);
   if (!process.env.SANS_AJUSTEMENT) ap.fitToRoad((x, z) => ground.isRoad(x, z));
   const A = ap as any;

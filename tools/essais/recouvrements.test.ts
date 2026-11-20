@@ -11,15 +11,25 @@ it('recouvrements', () => {
   const e = net.edges.find((x) => x.name === 'Place Jacques Duclos')!;
   const p0 = e.line.at(0);
   const player: PlayerInfo = { x: p0.x + 40, z: p0.z + 40, heading: 0, speed: 0, length: 4.05, width: 1.8, approach: null, approachDist: Infinity, inJunction: null, left: false, right: false };
-  const tr = new Traffic(net, { vehicles: 45, pedestrians: 30, seed: +(process.env.SEED ?? 3) });
+  const tr = new Traffic(net, { vehicles: +(process.env.DENSITE ?? 45), pedestrians: 30, seed: +(process.env.SEED ?? 3) });
   const dt = 1 / 30;
   const el = (o: Vehicle) => (o.link ? `L[${o.link.turn} ${o.link.from.edge.name}#${o.link.from.index}→${o.link.to.edge.name}#${o.link.to.index} s=${o.s.toFixed(1)}/${o.link.line.length.toFixed(1)} sommet=${o.link.vertex.id}/${o.link.vertex.ends.length}]` : `V[${o.lane!.edge.name}#${o.lane!.index} s=${o.s.toFixed(1)}/${o.lane!.line.length.toFixed(1)}]`);
+  const jour = new Map<number, { g: number; e: number; sans: boolean; was: number; onLink: boolean; int: boolean }>();
   const seen = new Map<string, number>();
   const kinds = new Map<string, number>();
   let n = 0;
   const stuck = new Map<number, number>();
   for (let t = 0; t < 360; t += dt) {
     tr.update(dt, player);
+    // journal des réservations : quand chaque véhicule a obtenu le passage, et quand il est entré
+    for (const o of tr.vehicles) {
+      const J = (jour.get(o.id) ?? jour.set(o.id, { g: -1, e: -1, sans: false, was: -1, onLink: false, int: false }).get(o.id))!;
+      const C = (tr as any).clusterOf, I = (tr as any).internalLanes;
+      if (o.grant >= 0 && J.was < 0) J.g = t;
+      const entering = !!o.link && C.has(o.link.vertex) && !J.onLink && !J.int;
+      if (entering) { J.e = t; J.sans = J.was < 0; }
+      J.was = o.grant; J.onLink = !!o.link; J.int = !!o.lane && I.has(o.lane);
+    }
     if (Math.round(t / dt) % 15 !== 0) continue;
     for (const v of tr.vehicles) stuck.set(v.id, v.v < 0.1 ? (stuck.get(v.id) ?? 0) + 0.5 : 0);
     for (let i = 0; i < tr.vehicles.length; i++) for (let j = i + 1; j < tr.vehicles.length; j++) {
@@ -30,7 +40,10 @@ it('recouvrements', () => {
       if (!seen.has(key)) {
         const rel = a.link && b.link ? (a.link === b.link ? 'même liaison' : a.link.conflicts.includes(b.link) ? 'liaisons en conflit' : a.link.to === b.link.to ? 'liaisons convergentes' : a.link.from === b.link.from ? 'liaisons divergentes' : 'liaisons sans relation') : a.lane && b.lane ? (a.lane === b.lane ? 'même voie' : a.lane.edge === b.lane.edge ? 'voies voisines' : 'voies différentes') : 'voie/liaison';
         kinds.set(rel, (kinds.get(rel) ?? 0) + 1);
-        console.log(`t=${t.toFixed(0)} ${rel} : ${a.id} ${el(a)} v=${a.v.toFixed(1)} | ${b.id} ${el(b)} v=${b.v.toFixed(1)}`);
+        const R = tr as any;
+        const gêne = a.link && b.link ? (R.clash.get(a.link)?.has(b.link) ? 'trajectoires incompatibles' : 'trajectoires jugées compatibles') : '';
+        const pos = (o: Vehicle) => `(${o.x.toFixed(1)};${o.z.toFixed(1)}) long=${o.length} attente=${o.waiting.toFixed(0)} rés=${o.grant} obtenue t=${jour.get(o.id)?.g.toFixed(1)} entrée t=${jour.get(o.id)?.e.toFixed(1)}${jour.get(o.id)?.sans ? ' SANS RÉSERVATION' : ''} trajet=${o.plan.length} queue=${o.tail ? o.tailLeft.toFixed(1) : '-'}`;
+        console.log(`t=${t.toFixed(0)} ${rel} ${gêne} : ${a.id} ${el(a)} v=${a.v.toFixed(1)} ${pos(a)} | ${b.id} ${el(b)} v=${b.v.toFixed(1)} ${pos(b)}`);
       }
       seen.set(key, (seen.get(key) ?? 0) + 1);
     }
@@ -46,6 +59,7 @@ it('recouvrements', () => {
       const end = o.lane.endRef, link = o.next;
       for (const q of T.byLink.get(link) ?? []) why.push(`sur ma liaison : ${q.id} s=${q.s.toFixed(1)} v=${q.v.toFixed(1)}`);
       for (const q of T.byLane.get(link.to) ?? []) why.push(`voie d'arrivée ${link.to.edge.name} (liaison ${link.line.length.toFixed(1)} m) : ${q.id} s=${q.s.toFixed(1)} v=${q.v.toFixed(1)}`);
+      why.push(...tr.explain(o));
       why.push(`ctl=${end.control}${end.controller ? ':' + end.controller.state(end.group, tr.time) : ''} attente=${o.waiting.toFixed(0)} filet=${o.netWait.toFixed(0)}`);
       for (const q of T.byLane.get(link.to) ?? []) if (q.s - q.length < o.length + 2 && q.v < 1.5) why.push(`sortie encombrée par ${q.id}`);
       for (const c of link.conflicts) for (const q of T.byLink.get(c) ?? []) why.push(`dans le carrefour : ${q.id} v=${q.v.toFixed(1)}`);

@@ -18,7 +18,7 @@ it('diagnostic', () => {
   const theme: Theme = (process.env.THEME as Theme) ?? 'tournants';
   const seed = +(process.env.SEED ?? 7);
   const pose = START_STREETS[theme].map((n) => startOnStreet(net, n, 0.25)).find(Boolean)!;
-  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z)) === 0; })!;
+  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z), (x, z, fx, fz) => ground.bodyHits(x, z, fx, fz)) === 0; })!;
   const traffic = new Traffic(net, { vehicles: 28, pedestrians: 22, seed });
   const rules = new RulesEngine(net, traffic);
   const player = new Player(ground, net, traffic);
@@ -44,7 +44,17 @@ it('diagnostic', () => {
       const c = ped?.crossing;
       const onLaneStops = A.segs.slice(A.k, A.k + 3).map((sg: any) => sg.lane ? sg.lane.stops.filter((s: any) => s.crossing === c).map((s: any) => `voie s=${s.s.toFixed(1)}`) : sg.link.exitCrossings.filter((x: any) => x.crossing === c).map((x: any) => `liaison s=${x.s.toFixed(1)}`)).flat();
       out.push(`PIÉTON ${ctx()} | piéton état=${ped?.state} progress=${ped?.progress.toFixed(2)} hasRight=${ped?.hasRight} attente=${ped?.waitTime.toFixed(1)} passage sur ${c?.edge.name} s=${c?.s.toFixed(1)}/${c?.edge.length.toFixed(1)} trimA=${c?.edge.endA.trim.toFixed(1)} trimB=${c?.edge.endB.trim.toFixed(1)} feux=${!!c?.controller} | connu du chemin : ${onLaneStops.join(', ') || 'NON'}`);
-    } else out.push(`CHOC ${kind}@${(speed * 3.6).toFixed(0)} ${ctx()}`);
+    } else {
+      out.push(`CHOC ${kind}@${(speed * 3.6).toFixed(0)} ${ctx()}`);
+      const T = traffic as any;
+      const fx = Math.sin(player.car.heading), fz = -Math.cos(player.car.heading);
+      for (const o of traffic.vehicles) {
+        const dx = o.x - player.car.x, dz = o.z - player.car.z;
+        if (Math.hypot(dx, dz) > 7) continue;
+        const el = o.link ? `liaison ${o.link.turn} ${o.link.from.edge.name}→${o.link.to.edge.name} s=${o.s.toFixed(1)}/${o.link.line.length.toFixed(1)} sommet=${o.link.vertex.id}` : `voie ${o.lane!.edge.name}#${o.lane!.index} s=${o.s.toFixed(1)}/${o.lane!.line.length.toFixed(1)}${o.next ? ` puis ${o.next.turn}→${o.next.to.edge.name}` : ''}`;
+        out.push(`    véh ${o.id} (${o.kind}) devant=${(dx * fx + dz * fz).toFixed(1)} côté=${(dx * -fz + dz * fx).toFixed(1)} cap relatif=${(((o.heading - player.car.heading) * 180 / Math.PI + 540) % 360 - 180).toFixed(0)}° v=${(o.v * 3.6).toFixed(0)}km/h a=${o.a.toFixed(1)} ${el} rés=${o.grant} trajet=${o.plan.length} attente=${o.waiting.toFixed(0)} interne=${o.lane ? T.internalLanes.has(o.lane) : '-'} carrefourComplexe=${o.link ? T.clusterOf.has(o.link.vertex) : o.next ? T.clusterOf.has(o.next.vertex) : '-'} écartJoueur=${T.playerGap(o, rules.playerInfo({ car: player.car, indicator: player.indicator, hazards: false, seatbelt: true, lights: false, handbrake: false, horn: false, lookLeftAt: -99, lookRightAt: -99, lookBackAt: -99, night: false })).toFixed(1)}`);
+      }
+    }
   };
   rules.onFault = (f) => { if (process.env.TOUT || f.inf.id === 'bordure' || f.inf.id === 'trottoir' || f.inf.id.startsWith('vitesse')) out.push(`${f.inf.id.toUpperCase()} ${f.detail} ${ctx()} roues=${Array.from(player.car.groundH).map((h) => (h > 0 ? 1 : 0)).join('')}`); };
   const dt = 1 / 60;
@@ -79,6 +89,7 @@ it('diagnostic', () => {
           const el = o.link ? `liaison ${o.link.turn} ${o.link.from.edge.name}→${o.link.to.edge.name}` : `voie ${o.lane!.edge.name}#${o.lane!.index}${o.next ? ` puis ${o.next.turn}→${o.next.to.edge.name}` : ''}`;
           if (o.lane && o.next) {
             const end = o.lane.endRef, link = o.next;
+            out.push('      réservation : ' + traffic.explain(o).join(' | ') + ` | attente=${o.waiting.toFixed(0)} rés=${o.grant}`);
             const why: string[] = [`ctl=${end.control}${end.controller ? ':' + end.controller.state(end.group, traffic.time) : ''} sommet=${end.vertex.id} branches=${end.vertex.ends.length} ligne=${(o.lane.fromEdgeS(end.sAt(end.stopDist)) - o.s).toFixed(1)}`];
             for (const q of T.byLane.get(link.to) ?? []) if (q.s - q.length < o.length + 2 && q.v < 1.5) why.push(`sortie encombrée par ${q.id} (s=${q.s.toFixed(1)} v=${q.v.toFixed(1)})`);
             for (const c of link.conflicts) {

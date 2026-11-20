@@ -53,10 +53,19 @@ export class Vehicle {
   /** temps passé arrêté derrière une carrosserie détectée par le filet géométrique */
   netWait = 0;
   crashed = 0;
+  /** suite du trajet réservé à travers un carrefour complexe (liaisons après `next`) */
+  plan: LaneLink[] = [];
+  /** carrefour complexe dont la traversée lui est réservée alors qu'il n'y est pas encore entré (-1 : aucun) */
+  grant = -1;
+  /** dernière liaison quittée, que l'arrière du véhicule occupe encore tant que `tailLeft` < sa longueur */
+  tail: LaneLink | null = null;
+  tailLeft = 0;
   /** durée d'immobilisation continue (s) */
   still = 0;
   /** temps d'arrêt derrière un joueur lui-même immobile */
   playerWait = 0;
+  /** temps passé à l'arrêt pour laisser le joueur s'insérer devant soi */
+  letIn = 0;
   /** écart latéral pris pour contourner le joueur arrêté qui empiète un peu sur la trajectoire (m, + à droite) */
   dodge = 0;
   /** recul en cours pour libérer le passage du joueur (m restants) et délai avant un nouveau recul (s) */
@@ -133,10 +142,14 @@ export class Traffic {
   private spawnTimer = 0;
   private pedTimer = 0;
   private cycTimer = 0;
-  /** carrefours complexes : identifiant de groupe par sommet, voies internes, véhicules immobilisés par groupe */
+  /** carrefours complexes : identifiant de groupe par sommet, voies internes */
   private clusterOf = new Map<Vertex, number>();
   private internalLanes = new Set<Lane>();
-  private jam = new Map<number, number>();
+  /** titulaires d'une réservation dans chaque carrefour complexe, et liaisons dont les trajectoires se gênent */
+  private inside = new Map<number, Vehicle[]>();
+  /** véhicules qui patientent depuis un moment à l'entrée de chaque carrefour complexe */
+  private claims = new Map<number, Vehicle[]>();
+  private clash = new Map<LaneLink, Set<LaneLink>>();
   private cycleLanes: Lane[] = [];
   private drivable: Lane[];
   opts: TrafficOptions;
@@ -178,27 +191,81 @@ export class Traffic {
   }
 
   private index() {
-    this.byLane.clear(); this.byLink.clear(); this.jam.clear();
+    this.byLane.clear(); this.byLink.clear(); this.inside.clear(); this.claims.clear();
     for (const v of this.vehicles) {
       if (v.link) { let a = this.byLink.get(v.link); if (!a) this.byLink.set(v.link, (a = [])); a.push(v); }
       else if (v.lane) { let a = this.byLane.get(v.lane); if (!a) this.byLane.set(v.lane, (a = [])); a.push(v); }
-      // véhicules immobilisés à l'intérieur d'un carrefour complexe
-      if (v.v < 0.3) {
-        const c = v.link ? this.clusterOf.get(v.link.vertex) : v.lane && this.internalLanes.has(v.lane) ? this.clusterOf.get(v.lane.to) : undefined;
-        if (c !== undefined) this.jam.set(c, (this.jam.get(c) ?? 0) + 1);
+      // titulaires d'une réservation dans un carrefour complexe : ceux qui s'y trouvent, ceux qui ont obtenu
+      // le passage et vont y entrer, ceux dont l'arrière en sort encore
+      let c: number | undefined;
+      if (v.link) c = this.clusterOf.get(v.link.vertex);
+      else if (v.lane) {
+        if (this.internalLanes.has(v.lane)) c = this.clusterOf.get(v.lane.to);
+        else if (v.grant >= 0 && v.next && this.clusterOf.get(v.next.vertex) === v.grant) c = v.grant;
+        else {
+          v.grant = -1;
+          if (v.tail && v.tailLeft < v.length + 1) c = this.clusterOf.get(v.tail.vertex);
+        }
+      }
+      if (v.grant >= 0 && v.grant !== c) v.grant = -1;
+      if (c !== undefined) { let a = this.inside.get(c); if (!a) this.inside.set(c, (a = [])); a.push(v); }
+      if (v.lane && v.next && v.grant < 0 && v.waiting > 6 && !this.internalLanes.has(v.lane)) {
+        const w = this.clusterOf.get(v.next.vertex);
+        if (w !== undefined) { let a = this.claims.get(w); if (!a) this.claims.set(w, (a = [])); a.push(v); }
       }
     }
   }
 
-  /** Regroupe en « carrefours complexes » les sommets reliés par des tronçons très courts. */
+  /**
+   * Regroupe en « carrefours complexes » les sommets reliés par des voies trop courtes pour qu'un véhicule
+   * s'y tienne sans déborder sur le carrefour précédent : tronçons de moins de 14 m entre deux carrefours,
+   * et voies de moins de 8 m une fois retirées les emprises des carrefours (les grandes places en sont
+   * faites). Certaines de ces voies se terminent par un feu, sans la place d'y attendre : la circulation
+   * traverse alors la place d'une traite, sous réservation, comme un seul carrefour.
+   */
   private buildClusters() {
     const parent = new Map<Vertex, Vertex>();
     const find = (a: Vertex): Vertex => { let r = a; while (parent.get(r) !== r) r = parent.get(r)!; parent.set(a, r); return r; };
-    const short = this.net.edges.filter((e) => e.length < 14 && e.a.ends.length >= 3 && e.b.ends.length >= 3);
-    for (const e of short) { if (!parent.has(e.a)) parent.set(e.a, e.a); if (!parent.has(e.b)) parent.set(e.b, e.b); }
-    for (const e of short) parent.set(find(e.a), find(e.b));
+    for (const e of this.net.edges) {
+      const short = e.length < 14 && e.a.ends.length >= 3 && e.b.ends.length >= 3;
+      for (const l of e.allLanes) {
+        if (l.kind === 'C') continue;
+        if (short || l.line.length < 8) this.internalLanes.add(l);
+      }
+    }
+    for (const l of this.internalLanes) {
+      const e = l.edge;
+      if (!parent.has(e.a)) parent.set(e.a, e.a);
+      if (!parent.has(e.b)) parent.set(e.b, e.b);
+      parent.set(find(e.a), find(e.b));
+    }
     for (const v of parent.keys()) this.clusterOf.set(v, find(v).id);
-    for (const e of short) for (const l of e.allLanes) this.internalLanes.add(l);
+    // trajectoires qui se gênent à l'intérieur d'un même carrefour complexe : croisement, frôlement à moins
+    // d'une largeur de voiture, ou arrivée sur la même voie
+    const byCluster = new Map<number, LaneLink[]>();
+    for (const l of this.net.links) {
+      const c = this.clusterOf.get(l.vertex);
+      if (c === undefined) continue;
+      let a = byCluster.get(c); if (!a) byCluster.set(c, (a = [])); a.push(l);
+    }
+    const near = (a: LaneLink, b: LaneLink): boolean => {
+      if (a.line.maxX < b.line.minX - 2 || b.line.maxX < a.line.minX - 2 || a.line.maxZ < b.line.minZ - 2 || b.line.maxZ < a.line.minZ - 2) return false;
+      for (let q = 1; q < b.line.length - 1; q += 1) {
+        const p = b.line.at(q), pr = a.line.project(p.x, p.z);
+        if (pr.s > 1 && pr.s < a.line.length - 1 && Math.hypot(p.x - pr.x, p.z - pr.z) < 2.0) return true;
+      }
+      return false;
+    };
+    for (const list of byCluster.values()) {
+      for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+        const a = list[i], b = list[j];
+        // même voie de départ, ou liaisons qui se suivent : simple file, pas un conflit
+        if (a.from === b.from || a.to === b.from || b.to === a.from) continue;
+        if (a.to !== b.to && !a.conflicts.includes(b) && !near(a, b)) continue;
+        let x = this.clash.get(a); if (!x) this.clash.set(a, (x = new Set())); x.add(b);
+        let y = this.clash.get(b); if (!y) this.clash.set(b, (y = new Set())); y.add(a);
+      }
+    }
   }
 
   // ───────────── apparition ─────────────
@@ -211,6 +278,7 @@ export class Traffic {
     let tries = 0;
     while (this.vehicles.filter((v) => v.alive).length < this.opts.vehicles && tries++ < 12) {
       const lane = this.rng.pick(this.drivable);
+      if (this.internalLanes.has(lane)) continue;
       const s = this.rng.range(4, lane.line.length - 2);
       const p = lane.line.at(s);
       const d = Math.hypot(p.x - player.x, p.z - player.z);
@@ -248,10 +316,33 @@ export class Traffic {
 
   private chooseNext(v: Vehicle) {
     const lane = v.lane!;
-    if (!lane.links.length) { v.next = null; return; }
+    // trajet déjà réservé à travers un carrefour complexe : on le suit
+    if (v.plan.length && v.plan[0].from === lane) { v.next = v.plan.shift()!; return; }
+    v.plan.length = 0;
+    v.next = this.pickLink(lane, undefined, v.kind);
+    // à l'entrée d'un carrefour complexe, on choisit d'emblée tout le trajet jusqu'à la sortie
+    // (sans jamais repasser par une voie déjà empruntée : pas de tour complet d'une place pour revenir à
+    // son point de départ)
+    if (v.next && this.clusterOf.has(v.next.vertex) && !this.internalLanes.has(lane)) {
+      const seen = new Set<Lane>([lane, v.next.to]);
+      let l = v.next;
+      for (let guard = 0; guard < 14 && this.internalLanes.has(l.to); guard++) {
+        const nx = this.pickLink(l.to, seen, v.kind);
+        if (!nx) break;
+        seen.add(nx.to);
+        v.plan.push(nx); l = nx;
+      }
+    }
+  }
+
+  private pickLink(lane: Lane, avoid?: Set<Lane>, kind?: VehicleKind): LaneLink | null {
+    if (!lane.links.length) return null;
     // on évite les impasses et on favorise la continuité de la rue
     const scored = lane.links.map((l) => {
       let w = l.turn === 'straight' ? 3 : 1;
+      if (avoid && avoid.has(l.to)) w *= 0.001;
+      // un autobus ne s'engage pas dans un virage serré : sa caisse balaierait la voie d'à côté
+      if (kind === 'bus' && Math.abs(l.angle) > 0.7 && l.line.length / Math.abs(l.angle) < 13) w *= 0.02;
       if (l.to.to.dead) w *= 0.05;
       if (l.to.edge.cls === 'service' || l.to.edge.living) w *= 0.4;
       if (!l.to.links.length && !l.to.to.exit) w *= 0.05;
@@ -259,8 +350,154 @@ export class Traffic {
     });
     const tot = scored.reduce((s, x) => s + x.w, 0);
     let r = this.rng.next() * tot;
-    v.next = scored[scored.length - 1].l;
-    for (const x of scored) { r -= x.w; if (r <= 0) { v.next = x.l; break; } }
+    for (const x of scored) { r -= x.w; if (r <= 0) return x.l; }
+    return scored[scored.length - 1].l;
+  }
+
+  /** Trajet à réserver à partir de `link` : jusqu'à la sortie du carrefour complexe. */
+  private pathFrom(v: Vehicle, link: LaneLink): LaneLink[] {
+    return v.next === link || v.link === link ? [link, ...v.plan] : [link];
+  }
+
+  /** Liaisons que le titulaire d'une réservation doit encore parcourir, là où il se trouve comprise. */
+  private route(o: Vehicle): LaneLink[] {
+    if (o.link) return o.grant >= 0 ? [o.link, ...o.plan] : [o.link];
+    if (o.grant < 0 || !o.next) return [];
+    return [o.next, ...o.plan];
+  }
+
+  /** Liaisons qu'occupe ou doit encore parcourir un véhicule engagé dans un carrefour complexe. */
+  private remaining(o: Vehicle): LaneLink[] {
+    const r = this.route(o);
+    if (o.tail && o.tailLeft < o.length + 1) r.unshift(o.tail);
+    return r;
+  }
+
+  /** Voie par laquelle ce véhicule quittera le carrefour complexe (null s'il n'y a rien de réservé). */
+  private exitOf(o: Vehicle): Lane | null {
+    const r = this.route(o);
+    return r.length ? r[r.length - 1].to : null;
+  }
+
+  /**
+   * File disponible à la sortie d'un carrefour complexe, la voie de sortie étant prolongée tant que la rue
+   * continue sans carrefour : `cap` la longueur totale, `room` la place qui y reste, `rear` la distance
+   * jusqu'à l'arrière du premier véhicule lent ou arrêté.
+   */
+  private exitRoom(exit: Lane): { cap: number; room: number; rear: number } {
+    let cap = 0, used = 0, rear = Infinity, lane = exit;
+    for (let k = 0; k < 6; k++) {
+      for (const o of this.byLane.get(lane) ?? []) {
+        used += o.length + 2;
+        if (o.v < 1.5) rear = Math.min(rear, cap + o.s - o.length);
+      }
+      cap += lane.line.length;
+      if (cap - used > 80 || lane.to.ends.length !== 2 || !lane.links.length) break;
+      const nx = lane.links.find((l) => l.turn === 'straight') ?? lane.links[0];
+      for (const o of this.byLink.get(nx) ?? []) {
+        used += o.length + 2;
+        if (o.v < 1.5) rear = Math.min(rear, cap + o.s - o.length);
+      }
+      cap += nx.line.length;
+      lane = nx.to;
+    }
+    return { cap, room: cap - used, rear };
+  }
+
+  /** La sortie peut-elle accueillir une file de longueur `queue` ? */
+  private exitFits(exit: Lane, queue: number): boolean {
+    // trajet qui ne débouche sur aucune voie d'attente (impasse, bord de carte) : rien à vérifier
+    if (this.internalLanes.has(exit) || !exit.links.length) return true;
+    const r = this.exitRoom(exit);
+    if (r.rear < queue) return false;
+    // voie de sortie trop courte pour jamais nous contenir (quelques mètres avant un feu) : on s'y engage
+    // dès lors que personne n'y est arrêté
+    return r.cap < queue || r.room >= queue;
+  }
+
+  /** Le trajet de `v` à partir de `link`, à travers le carrefour complexe `cl`, est-il libre de toute réservation gênante ? */
+  private clusterFree(v: Vehicle, link: LaneLink, cl: number): boolean {
+    const mine = this.pathFrom(v, link);
+    const exit = mine[mine.length - 1].to;
+    const holders = this.inside.get(cl) ?? [];
+    // la sortie doit pouvoir nous accueillir, nous et ceux qui s'y rendent déjà (R415-2 : on ne s'engage pas
+    // si l'on risque de rester immobilisé dans le carrefour)
+    let queue = v.length + 2;
+    for (const o of holders) if (o !== v && this.exitOf(o) === exit) queue += o.length + 2;
+    if (exit !== v.lane && !this.exitFits(exit, queue)) return false;
+    // personne d'arrêté sur notre trajet
+    if (this.stoppedOn(mine)) return false;
+    // chacun son tour : celui qui patiente depuis plus longtemps à une autre entrée, pour un trajet qui gêne
+    // le nôtre ou vers la même sortie, passe d'abord — sauf si les règles de priorité nous donnent le passage,
+    // ou s'il est lui-même retenu par un véhicule immobilisé
+    const hits = (b: LaneLink, path: LaneLink[]) => { const x = this.clash.get(b); return !!x && path.some((a) => a !== b && x.has(a)); };
+    for (const o of this.claims.get(cl) ?? []) {
+      if (o === v || o.grant >= 0 || o.lane === v.lane || o.waiting < v.waiting + 3) continue;
+      const oEnd = o.lane!.endRef;
+      if (oEnd.control === 'signal' && oEnd.controller && oEnd.controller.state(oEnd.group, this.time) !== 'green') continue;
+      if (o.lane!.line.length - o.s > 12 || (this.byLane.get(o.lane!) ?? []).some((q) => q !== o && q.s > o.s)) continue;
+      const theirs = this.pathFrom(o, o.next!);
+      const oExit = theirs[theirs.length - 1].to;
+      if (oExit !== exit && !theirs.some((b) => hits(b, mine))) continue;
+      const vEnd = v.lane!.endRef;
+      if (vEnd.vertex === oEnd.vertex && this.hasPriorityOver(vEnd, link, oEnd, o.next!, -oEnd.dx, -oEnd.dz)) continue;
+      if (this.stoppedOn(theirs) || (oExit !== exit && !this.exitFits(oExit, o.length + 2))) continue;
+      if (holders.some((h) => h !== o && h.v < 0.3 && this.remaining(h).some((b) => hits(b, theirs)))) continue;
+      return false;
+    }
+    // aucun véhicule engagé dont le trajet restant croise, frôle ou rejoint le nôtre
+    for (const o of holders) {
+      if (o === v) continue;
+      if (v.waiting > 45 && o.v < 0.3) continue; // il n'avance plus du tout : on ne l'attend pas indéfiniment
+      if (this.remaining(o).some((b) => hits(b, mine))) return false;
+    }
+    return true;
+  }
+
+  /** Liaisons que ce véhicule va emprunter dans le carrefour complexe où il est engagé (trajet réservé). */
+  plannedLinks(o: Vehicle): LaneLink[] {
+    return this.route(o);
+  }
+
+  /** Diagnostic : ce qui empêche `v` d'obtenir sa réservation dans le carrefour complexe qu'il aborde. */
+  explain(v: Vehicle): string[] {
+    const out: string[] = [];
+    const link = v.next;
+    if (!v.lane || !link) return out;
+    const cl = this.clusterOf.get(link.vertex);
+    if (cl === undefined) return out;
+    const mine = this.pathFrom(v, link);
+    const exit = mine[mine.length - 1].to;
+    const holders = this.inside.get(cl) ?? [];
+    let queue = v.length + 2;
+    for (const o of holders) if (o !== v && this.exitOf(o) === exit) { queue += o.length + 2; out.push(`même sortie : ${o.id}`); }
+    out.push(`trajet ${mine.length} liaisons, sortie ${exit.edge.name} (${exit.line.length.toFixed(0)} m), place ${this.exitRoom(exit).room.toFixed(1)}/${this.exitRoom(exit).cap.toFixed(0)} (arrière ${this.exitRoom(exit).rear.toFixed(1)}) pour ${queue.toFixed(1)}, réservation ${v.grant}`);
+    for (const l of mine) {
+      for (const o of this.byLink.get(l) ?? []) if (o.v < 1) out.push(`arrêté sur le trajet (liaison) : ${o.id}`);
+      if (this.internalLanes.has(l.to)) for (const o of this.byLane.get(l.to) ?? []) if (o.v < 1) out.push(`arrêté sur le trajet (voie interne) : ${o.id}`);
+    }
+    for (const o of holders) {
+      if (o === v) continue;
+      for (const b of this.remaining(o)) {
+        const x = this.clash.get(b);
+        if (x && mine.some((a) => a !== b && x.has(a))) { out.push(`trajet réservé par ${o.id} (v=${o.v.toFixed(1)}, ${o.link ? 'liaison' : o.grant >= 0 ? 'en approche sur ' + o.lane!.edge.name : this.internalLanes.has(o.lane!) ? 'voie interne' : 'queue'}, ${b.turn} ${b.from.edge.name}→${b.to.edge.name})`); break; }
+      }
+    }
+    return out;
+  }
+
+  /** Un véhicule est-il arrêté sur ce trajet (liaisons et voies internes) ? */
+  private stoppedOn(path: LaneLink[]): boolean {
+    for (const l of path) {
+      for (const o of this.byLink.get(l) ?? []) if (o.v < 1) return true;
+      if (this.internalLanes.has(l.to)) for (const o of this.byLane.get(l.to) ?? []) if (o.v < 1) return true;
+    }
+    return false;
+  }
+
+  /** Rend la réservation obtenue par un véhicule qui n'est pas encore entré dans le carrefour complexe. */
+  private release(v: Vehicle) {
+    v.grant = -1;
   }
 
   private place(v: Vehicle) {
@@ -268,6 +505,15 @@ export class Traffic {
     // l'abscisse s est celle de l'avant. La caisse est posée sur la corde entre un point proche de l'avant
     // et un point proche de l'arrière, tous deux sur la trajectoire : dans un virage, un véhicule long
     // (autobus) garde ainsi ses extrémités sur sa voie au lieu de balayer la voie voisine avec son avant.
+    if (L.length < 0.5) {
+      // élément dégénéré (liaison de longueur nulle entre deux tronçons alignés) : il n'a pas de direction
+      // propre. On garde le cap acquis, l'avant posé sur l'élément — sans quoi le véhicule se retrouverait
+      // en travers le temps d'une image.
+      const f = L.at(Math.min(v.s, L.length));
+      const hx = Math.sin(v.heading), hz = -Math.cos(v.heading);
+      v.x = f.x - hx * v.length * 0.5 + Math.cos(v.heading) * v.dodge; v.z = f.z - hz * v.length * 0.5 + Math.sin(v.heading) * v.dodge;
+      return;
+    }
     const a = L.at(v.s - v.length * 0.12), b = L.at(v.s - v.length * 0.88);
     const dx = a.x - b.x, dz = a.z - b.z;
     v.heading = Math.hypot(dx, dz) > 1e-6 ? Math.atan2(dx, -dz) : Math.atan2(a.tx, -a.tz);
@@ -309,13 +555,11 @@ export class Traffic {
     // véhicule qui précède sur le même élément
     const same = (v.link ? this.byLink.get(v.link) : this.byLane.get(v.lane!)) ?? [];
     for (const o of same) if (o !== v && o.s > v.s) consider(o.s - o.length - v.s, o.v);
-    // …puis sur l'élément suivant
-    if (v.lane && v.next) {
-      for (const o of this.byLink.get(v.next) ?? []) consider(remaining + o.s - o.length, o.v);
-      for (const o of this.byLane.get(v.next.to) ?? []) consider(remaining + v.next.line.length + o.s - o.length, o.v);
-    } else if (v.link) {
-      for (const o of this.byLane.get(v.link.to) ?? []) consider(remaining + o.s - o.length, o.v);
-    }
+    // …puis sur les éléments suivants (dans une grande place, faite de voies de quelques mètres, le regard
+    // porte le long de tout le trajet réservé)
+    this.ahead(v, (line, off, lane, link) => {
+      for (const o of (link ? this.byLink.get(link) : this.byLane.get(lane!)) ?? []) consider(off + o.s - o.length, o.v);
+    });
 
     // dans le carrefour : on laisse dégager le véhicule plus engagé sur une trajectoire qui coupe la nôtre
     if (v.link) {
@@ -370,11 +614,18 @@ export class Traffic {
         const need = this.playerOverlap(v, player);
         if (need !== 0 && Math.abs(need) <= 0.85) target = need;
       }
-      v.dodge += clamp(target - v.dodge, -0.5 * dt, 0.5 * dt);
+      // en plein contournement, tant que le joueur est tout près : on garde l'écart acquis (se rabattre
+      // maintenant serait se rabattre sur lui), et s'il se remet à bouger on s'arrête pour le laisser faire
+      const passing = v.dodge !== 0 && target === 0 && Math.hypot(player.x - v.x, player.z - v.z) < (v.length + player.length) / 2 + 2.5;
+      if (!passing) v.dodge += clamp(target - v.dodge, -0.5 * dt, 0.5 * dt);
+      else if (!still) v0 = 0;
       // face-à-face : le joueur est à l'arrêt en travers de notre route, et nous sommes en travers de la
       // sienne. Comme le ferait un conducteur courtois, on recule de quelques mètres pour le laisser passer.
       v.backCooldown = Math.max(0, v.backCooldown - dt);
-      if (v.backing <= 0 && v.backCooldown <= 0 && still && v.playerWait > 12 && target === 0 && this.blocksPlayer(v, player) && this.rearFree(v)) {
+      // (nez à nez au milieu d'un carrefour, chacun en plein virage : le joueur n'est pas forcément « droit
+      // devant », mais à moins de 4 m sur notre trajectoire le blocage est le même)
+      const faceOff = still && target === 0 && (playerAhead < 4 || this.blocksPlayer(v, player));
+      if (v.backing <= 0 && v.backCooldown <= 0 && v.playerWait > 12 && faceOff && this.rearFree(v)) {
         v.backing = Math.min(4, Math.max(0, v.s - 0.3));
       }
       if (v.backing > 0) {
@@ -391,7 +642,7 @@ export class Traffic {
       v.reversing = false;
       // dernier recours : blocage complet depuis une demi-minute, personne ne peut reculer — le véhicule
       // qui barre la route du joueur est retiré de la circulation, pour que la leçon ne reste pas figée
-      if (still && v.playerWait > 30 && target === 0 && this.blocksPlayer(v, player)) { v.alive = false; return; }
+      if (v.playerWait > 30 && faceOff) { v.alive = false; return; }
       if (target !== 0 && Math.abs(v.dodge - target) < 0.04) { playerAhead = Infinity; v0 = Math.min(v0, 1.8); }
       if (playerAhead < gap) {
         // composante de la vitesse du joueur le long de notre trajectoire
@@ -400,6 +651,21 @@ export class Traffic {
         consider(playerAhead, Math.max(0, pv));
       }
     }
+
+    // le joueur, dans la file d'à côté, met son clignotant vers notre voie alors qu'il est à notre hauteur ou
+    // devant : on lève le pied pour le laisser s'insérer (quelques secondes de patience s'il ne bouge pas)
+    let cutIn = Infinity, cutV = 0;
+    if (player && v.lane && (player.left || player.right) && v.letIn < 8) {
+      const ch = Math.cos(v.heading), sh = Math.sin(v.heading);
+      const dx = player.x - v.x, dz = player.z - v.z;
+      const right = dx * ch + dz * sh;
+      const along = dx * sh - dz * ch - v.length / 2 - player.length / 2;
+      const rel = Math.cos(player.heading - v.heading);
+      if (rel > 0.85 && Math.abs(right) > 1.5 && Math.abs(right) < 4.6 && along > -3 && along < 18 && (right > 0 ? player.left : player.right)) {
+        cutIn = Math.max(0.8, along); cutV = Math.max(0, player.speed * rel);
+      }
+    }
+    if (cutIn < Infinity) { if (v.v < 1) v.letIn += dt; } else v.letIn = Math.max(0, v.letIn - dt * 0.5);
 
     // ── points d'arrêt sur la voie : feux, stop, cédez, passages piétons ──
     let mustStopAt = Infinity;
@@ -423,6 +689,8 @@ export class Traffic {
           continue;
         }
         if (d < -1.5 || d > 70) continue;
+        // feu en bout de voie interne à une grande place : pas de zone d'attente, voir mustYield
+        if (sp.kind === 'signal' && sp.atEnd && this.internalLanes.has(v.lane)) continue;
         if (sp.kind === 'signal' && sp.controller) {
           const st = sp.controller.state(sp.group ?? 0, this.time);
           if (st === 'red' && d > -0.5) mustStopAt = Math.min(mustStopAt, d);
@@ -436,8 +704,9 @@ export class Traffic {
         const end = v.lane.endRef;
         const dEnd = remaining;
         if (dEnd < 45) {
-          const stopLine = Math.max(0, v.lane.fromEdgeS(end.sAt(end.stopDist)) - v.s);
-          const blocked = this.mustYield(v, v.next, end, stopLine, player);
+          const toLine = v.lane.fromEdgeS(end.sAt(end.stopDist)) - v.s;
+          const stopLine = Math.max(0, toLine);
+          const blocked = this.mustYield(v, v.next, end, stopLine, player, toLine < -0.5);
           if (blocked) mustStopAt = Math.min(mustStopAt, stopLine);
           // l'attente ne retombe qu'une fois réellement reparti : sinon les règles qui dénouent un blocage
           // mutuel s'annuleraient dès la première image où elles s'appliquent
@@ -454,6 +723,12 @@ export class Traffic {
     const sStar = IDM.s0 + Math.max(0, v.v * IDM.T + (v.v * dv) / (2 * Math.sqrt(IDM.a * IDM.b)));
     let acc = IDM.a * (1 - Math.pow(v.v / Math.max(0.5, v0), 4) - (gap < 1e6 ? (sStar / Math.max(0.3, gap)) ** 2 : 0));
     acc = clamp(acc, -8, IDM.a);
+    if (cutIn < Infinity) {
+      // ralentissement en douceur, jamais un freinage appuyé : on ouvre un créneau, on ne pile pas
+      const sIn = IDM.s0 + Math.max(0, v.v * IDM.T + (v.v * (v.v - cutV)) / (2 * Math.sqrt(IDM.a * IDM.b)));
+      const soft = IDM.a * (1 - Math.pow(v.v / Math.max(0.5, v0), 4) - (sIn / Math.max(0.3, cutIn)) ** 2);
+      acc = Math.min(acc, Math.max(-2.5, soft));
+    }
     // freinage d'urgence provoqué par le joueur alors que le véhicule était prioritaire
     if (player && playerAhead < 25 && acc < -3.6 && v.v > 2.5) {
       v.forcedByPlayer += dt;
@@ -467,13 +742,16 @@ export class Traffic {
     const ds = v.v * dt;
     v.s += ds;
     v.wheelPhase += ds;
+    v.tailLeft += ds;
 
     // ── passage à l'élément suivant ──
     if (v.s >= L.length) {
       const over = v.s - L.length;
       if (v.link) {
+        v.tail = v.link; v.tailLeft = over;
         v.lane = v.link.to; v.link = null; v.s = over;
         v.stoppedAtStop = 0; v.waiting = 0;
+        if (!this.internalLanes.has(v.lane)) v.grant = -1; // sorti du carrefour complexe
         this.chooseNext(v);
       } else if (v.next) {
         v.link = v.next; v.lane = null; v.next = null; v.s = over;
@@ -484,6 +762,23 @@ export class Traffic {
       }
     }
     this.place(v);
+  }
+
+  /** Parcourt les éléments (liaisons et voies) qui suivent celui où se trouve `v`, sur une cinquantaine de mètres. */
+  private ahead(v: Vehicle, f: (line: Polyline, offset: number, lane: Lane | null, link: LaneLink | null) => void) {
+    let off = v.path.length - v.s;
+    let lane: Lane;
+    if (v.link) lane = v.link.to;
+    else if (v.next) { f(v.next.line, off, null, v.next); off += v.next.line.length; lane = v.next.to; }
+    else return;
+    f(lane.line, off, lane, null);
+    off += lane.line.length;
+    for (const l of v.plan) {
+      if (off > 50 || l.from !== lane) break;
+      f(l.line, off, null, l); off += l.line.length;
+      lane = l.to;
+      f(lane.line, off, lane, null); off += lane.line.length;
+    }
   }
 
   /** Distance libre jusqu'à la carrosserie de `o` si elle empiète sur le couloir de `v` dans les 14 m (sinon ∞). */
@@ -582,11 +877,8 @@ export class Traffic {
       const along = p.length / 2 * ca + (p.width / 2) * (1 - ca);
       best = Math.min(best, offset + pr.s - sFrom - along);
     };
-    const L = v.path;
-    test(L, v.s, 0);
-    const rem = L.length - v.s;
-    if (v.lane && v.next) { test(v.next.line, 0, rem); test(v.next.to.line, 0, rem + v.next.line.length); }
-    else if (v.link) test(v.link.to.line, 0, rem);
+    test(v.path, v.s, 0);
+    this.ahead(v, (line, off) => test(line, 0, off));
     return best;
   }
 
@@ -602,28 +894,70 @@ export class Traffic {
     return false;
   }
 
-  /** Le véhicule doit-il céder le passage avant d'emprunter la liaison `link` ? */
-  private mustYield(v: Vehicle, link: LaneLink, end: EdgeEnd, distToLine: number, player: PlayerInfo | null): boolean {
+  /**
+   * Le véhicule doit-il céder le passage avant d'emprunter la liaison `link` ?
+   * `past` : il a déjà franchi sa ligne d'arrêt.
+   */
+  private mustYield(v: Vehicle, link: LaneLink, end: EdgeEnd, distToLine: number, player: PlayerInfo | null, past = false): boolean {
     const ctl = end.control;
+    // carrefour complexe (plusieurs sommets reliés par des voies très courtes, comme une grande place) : on
+    // n'y entre qu'après avoir réservé tout son trajet jusqu'à la sortie, et sa place à la sortie. Deux
+    // trajets qui se croisent, se frôlent ou se rejoignent ne sont jamais réservés en même temps : c'est ce
+    // qui empêche le carrefour de se nouer (R415-2).
+    const cl = this.clusterOf.get(link.vertex);
+    const held = cl !== undefined && v.grant === cl;
     if (ctl === 'signal' && end.controller) {
       const st = end.controller.state(end.group, this.time);
-      if (st !== 'green') return false; // l'arrêt au feu est géré par les points d'arrêt
+      if (st !== 'green') {
+        if (this.internalLanes.has(v.lane!)) {
+          // feu au bout d'une voie de quelques mètres, à l'intérieur d'une grande place : impossible d'y
+          // attendre sans barrer le carrefour qu'on vient de traverser. Le véhicule, entré au vert, achève
+          // sa traversée — mais laisse toujours passer le joueur, pour qui ce feu est au vert en face.
+          return !!player && this.playerCrossing(player, end, link);
+        }
+        // l'arrêt au feu est géré par les points d'arrêt ; celui qui va s'arrêter rend sa réservation
+        const stops = st === 'red' ? !past : distToLine > (v.v * v.v) / (2 * 3.2) + 1;
+        if (stops) { if (held) this.release(v); return false; }
+        if (held || cl === undefined) return false;
+        // ligne franchie sans réservation : il faut l'obtenir pour continuer
+      }
     }
     if (ctl === 'stop' && v.stoppedAtStop < 0.8) return true;
-    // carrefour complexe (plusieurs sommets reliés par des voies très courtes, comme une grande place) :
-    // on n'y entre pas tant que des véhicules y sont immobilisés — c'est ce qui évite qu'il se noue (R415-2)
+    const inX = -end.dx, inZ = -end.dz;
+    if (cl === undefined) return this.yieldsAt(v, link, end, distToLine, inX, inZ, player, false);
+    if (held) {
+      // trajet réservé : on ne cède plus qu'au joueur, qui ne réserve rien
+      if (!this.yieldsAt(v, link, end, distToLine, inX, inZ, player, true)) return false;
+      if (!this.internalLanes.has(v.lane!)) this.release(v);
+      return true;
+    }
+    if (this.yieldsAt(v, link, end, distToLine, inX, inZ, player, false)) return true;
+    if (!this.clusterFree(v, link, cl)) return true;
+    // la réservation n'est prise qu'au moment de s'engager, et dans l'ordre de la file : un véhicule ne
+    // réserve pas tant que celui qui le précède sur sa voie n'a pas obtenu la sienne
+    if (distToLine < Math.max(10, v.v * 3)) {
+      const q = this.byLane.get(v.lane!);
+      if (q && q.some((o) => o !== v && o.s > v.s && o.grant !== cl)) return distToLine < (v.v * v.v) / (2 * 2.5) + 4;
+      v.grant = cl;
+      let a = this.inside.get(cl); if (!a) this.inside.set(cl, (a = [])); if (!a.includes(v)) a.push(v);
+    }
+    return false;
+  }
+
+  /** Règles de priorité au sommet d'entrée. `reserved` : le trajet est déjà réservé, seul le joueur compte. */
+  private yieldsAt(v: Vehicle, link: LaneLink, end: EdgeEnd, distToLine: number, inX: number, inZ: number, player: PlayerInfo | null, reserved: boolean): boolean {
     const cl = this.clusterOf.get(link.vertex);
-    if (cl !== undefined && !this.internalLanes.has(v.lane!) && (this.jam.get(cl) ?? 0) >= 2 && v.waiting < 45) return true;
-    // ne pas s'engager si la sortie est encombrée
-    const outQ = this.byLane.get(link.to) ?? [];
-    for (const o of outQ) if (o.s - o.length < v.length + 2 && o.v < 1.5) return true;
+    if (!reserved) {
+      // ne pas s'engager si la sortie est encombrée
+      const outQ = this.byLane.get(link.to) ?? [];
+      for (const o of outQ) if (o.s - o.length < v.length + 2 && o.v < 1.5) return true;
+    }
     const myEta = distToLine / Math.max(1.5, v.v);
     if (myEta > 5) return false;
-    const inX = -end.dx, inZ = -end.dz;
-
-    for (const c of link.conflicts) {
-      // véhicules déjà dans le carrefour sur une trajectoire en conflit
-      const inside = this.byLink.get(c);
+    if (!reserved) for (const c of link.conflicts) {
+      // véhicules déjà dans le carrefour sur une trajectoire en conflit (dans un carrefour complexe, ce sont
+      // les réservations qui en décident)
+      const inside = cl === undefined ? this.byLink.get(c) : undefined;
       if (inside && inside.length) {
         if (!(v.waiting > 14 && inside.every((o) => o.v < 0.3 && o.id > v.id))) return true;
       }
@@ -636,20 +970,46 @@ export class Traffic {
         if (oEnd.control === 'signal' && oEnd.controller && oEnd.controller.state(oEnd.group, this.time) !== 'green') continue;
         const eta = od / Math.max(2, o.v);
         if (od < 9 || eta < 3.6) {
-          // blocage mutuel : le plus petit identifiant passe après une longue attente
           // blocage mutuel entre usagers à l'arrêt (chacun cède à sa droite) : celui qui attend depuis le
           // plus longtemps passe ; à attente égale, le plus petit identifiant
           if (o.v < 0.3 && v.waiting > 8 && (v.waiting > o.waiting + 2 || (v.waiting > o.waiting - 2 && v.id < o.id))) continue;
+          // prioritaire, mais lui-même retenu à l'entrée d'un carrefour complexe dont il n'obtient pas le
+          // passage : inutile de l'attendre
+          if (cl !== undefined && o.v < 0.3 && o.grant < 0 && !this.clusterFree(o, c, cl)) continue;
           return true;
         }
       }
     }
     // le joueur
-    if (player) {
-      const pv = this.playerPriority(player, end, link, inX, inZ);
-      if (pv) return true;
-    }
+    if (player && (this.playerPriority(player, end, link, inX, inZ) || this.playerMerging(player, v, end, link))) return true;
     return false;
+  }
+
+  /**
+   * Entonnoir : deux files de la même rue débouchent, à travers le carrefour, sur une seule voie. Si le
+   * joueur est dans la file d'à côté, à notre hauteur ou devant, on le laisse passer le premier.
+   */
+  private playerMerging(p: PlayerInfo, v: Vehicle, end: EdgeEnd, link: LaneLink): boolean {
+    if (p.approach !== end || p.inJunction) return false;
+    let lane: Lane | null = null, bd = 2.0;
+    for (const l of end.edge.allLanes) {
+      if (l === v.lane || l.endRef !== end || l.kind === 'C') continue;
+      const d = Math.abs(l.line.project(p.x, p.z).d);
+      if (d < bd) { bd = d; lane = l; }
+    }
+    if (!lane || !lane.links.some((k) => k.to === link.to)) return false;
+    const along = v.lane!.line.project(p.x, p.z).s - v.s; // centre du joueur par rapport à notre avant
+    if (along > 25) return false;
+    if (along < -3) {
+      // nous sommes devant : on passe d'abord — sauf si l'on démarre à peine alors que le joueur arrive
+      // lancé, auquel cas il serait à notre hauteur au moment où les deux files se rejoignent
+      if (v.v > 3 || Math.abs(p.speed) < 2) return false;
+      const len = v.lane!.line.length;
+      const etaP = (len - v.s - along) / Math.abs(p.speed);
+      const etaMe = (len - v.s) / Math.max(1.5, v.v) + 1.5;
+      return etaP < etaMe + 1;
+    }
+    return Math.abs(p.speed) > 0.5 || v.waiting < 6;
   }
 
   /** L'usager venant par `oEnd` (liaison `oLink`) est-il prioritaire sur moi (`end`, `link`) ? */
@@ -675,6 +1035,16 @@ export class Traffic {
     if (cross > 0.35) return false;
     // face à face : celui qui tourne à gauche cède
     return link.turn === 'left' && (!oLink || oLink.turn !== 'left');
+  }
+
+  /** Le joueur traverse-t-il ou aborde-t-il ce carrefour par une autre branche, quelle que soit la priorité ? */
+  private playerCrossing(p: PlayerInfo, end: EdgeEnd, link: LaneLink): boolean {
+    const V = end.vertex;
+    if (p.inJunction === V) return Math.abs(link.line.project(p.x, p.z).d) < 4.5;
+    const pe = p.approach;
+    if (!pe || pe.vertex !== V || pe === end) return false;
+    if (pe.control === 'signal' && pe.controller && pe.controller.state(pe.group, this.time) === 'red') return false;
+    return p.approachDist < 12 || p.approachDist / Math.max(2, Math.abs(p.speed)) < 4;
   }
 
   /** Le joueur est-il un usager prioritaire à laisser passer ? */
@@ -807,7 +1177,7 @@ export class Traffic {
     const near: Crossing[] = [];
     for (const c of this.net.crossings) {
       const d = Math.hypot(c.x - player.x, c.z - player.z);
-      if (d > 25 && d < 140) near.push(c);
+      if (d > 25 && d < 140 && this.kerbSafe(c)) near.push(c);
     }
     if (!near.length) return;
     for (let k = 0; k < 3 && this.pedestrians.length < this.opts.pedestrians; k++) {
@@ -820,6 +1190,32 @@ export class Traffic {
       if (!w || this.time - w.t >= 34) this.pedWave.set(c, { t: this.time, n: 1 }); else w.n++;
       this.spawnPedestrian(c);
     }
+  }
+
+  /**
+   * Les deux points d'attente du passage sont-ils bien sur un trottoir ? Là où deux chaussées se rejoignent
+   * en biais (grandes places), le bord de l'une peut tomber sur la voie de l'autre : on n'y fait attendre
+   * personne.
+   */
+  private kerbCache = new Map<Crossing, boolean>();
+  private kerbSafe(c: Crossing): boolean {
+    let ok = this.kerbCache.get(c);
+    if (ok !== undefined) return ok;
+    ok = true;
+    const nx = -c.tz, nz = c.tx, half = c.edge.half + 1.0;
+    for (const side of [1, -1]) for (const k of [-0.6, 0, 0.6]) {
+      const x = c.x + nx * side * half + c.tx * c.halfLen * k, z = c.z + nz * side * half + c.tz * c.halfLen * k;
+      for (const e of this.net.edges) {
+        if (e === c.edge) continue;
+        const L = e.line;
+        if (x < L.minX - e.half - 1 || x > L.maxX + e.half + 1 || z < L.minZ - e.half - 1 || z > L.maxZ + e.half + 1) continue;
+        const pr = L.project(x, z);
+        if (pr.s > 0.01 && pr.s < L.length - 0.01 && Math.abs(pr.d) < e.half + 0.3) { ok = false; break; }
+      }
+      if (!ok) break;
+    }
+    this.kerbCache.set(c, ok);
+    return ok;
   }
 
   spawnPedestrian(c: Crossing, side?: 1 | -1, startAtKerb = false): Pedestrian {

@@ -344,7 +344,7 @@ export class Game implements MenuHost {
     // itinéraire
     this.route = null; this.follower = null; this.demo = null; this.handover = 0; this.hud.setDemo(false);
     // on ne retient que des parcours dont chaque virage est praticable sans toucher une bordure
-    const clean = (r: Route) => { const ap = new Autopilot(this.net, null, r); ap.fitToRoad((x, z) => this.ground.isRoad(x, z)); return ap.pathIssues((x, z) => this.ground.isRoad(x, z)) === 0; };
+    const clean = (r: Route) => { const ap = new Autopilot(this.net, null, r); ap.fitToRoad((x, z) => this.ground.isRoad(x, z)); return ap.pathIssues((x, z) => this.ground.isRoad(x, z), (x, z, fx, fz) => this.ground.bodyHits(x, z, fx, fz)) === 0; };
     if (lesson.theme === 'examen') this.route = planExam(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, seed, clean);
     else if (lesson.steps.some((st) => st.text === 'Suivez les indications du moniteur jusqu’à l’arrivée')) this.route = planRoute(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, lesson.theme, seed, undefined, clean);
     if (this.route) this.follower = new RouteFollower(this.route);

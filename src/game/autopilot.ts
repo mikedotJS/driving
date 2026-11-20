@@ -188,7 +188,7 @@ export class Autopilot {
    * Contrôle géométrique de l'itinéraire : nombre d'endroits où la trajectoire (déjà ajustée) tourne plus
    * court que la voiture ne le peut, ou ferait sortir une roue de la chaussée. 0 = praticable sans manœuvre.
    */
-  pathIssues(isRoad: (x: number, z: number) => boolean, wheelbase = 2.583, halfTrack = 0.75): number {
+  pathIssues(isRoad: (x: number, z: number) => boolean, solid?: (x: number, z: number, fx: number, fz: number) => boolean, wheelbase = 2.583, halfTrack = 0.75): number {
     const SIDE = halfTrack + 0.11 + 0.08;
     let issues = 0;
     for (let k = 0; k < this.segs.length; k++) {
@@ -199,6 +199,14 @@ export class Autopilot {
         if (sg.lane && !((nearStart && q < 12) || (nearEnd && q > L - 12))) continue;
         if (Math.abs(sg.line.curvatureAt(q, 2)) > 1 / 3.9) { issues++; continue; }
         const p = sg.line.at(q);
+        // la caisse (porte-à-faux compris) ne doit frôler ni mur ni façade : centre à 1,38 m devant l'essieu arrière
+        // (en virage serré, la voiture réelle s'écarte de quelques décimètres de la trajectoire : on vérifie
+        // aussi de part et d'autre)
+        if (solid) {
+          const m = clamp(Math.abs(sg.line.curvatureAt(q, 2)) * 4, 0, 0.6);
+          const cx = p.x + p.tx * 1.38, cz = p.z + p.tz * 1.38;
+          if (solid(cx, cz, p.tx, p.tz) || (m > 0.1 && (solid(cx - p.tz * m, cz + p.tx * m, p.tx, p.tz) || solid(cx + p.tz * m, cz - p.tx * m, p.tx, p.tz)))) issues++;
+        }
         for (const ahead of [0, wheelbase]) {
           const cx = p.x + p.tx * ahead, cz = p.z + p.tz * ahead;
           // (les deux côtés dehors : la carte est incohérente à cet endroit, ce n'est pas un défaut du virage)
@@ -311,7 +319,7 @@ export class Autopilot {
               if (d > -0.5) stopAt(Math.max(0, d - 0.5), 'stop');
               if (d < 2.2 && v < 0.15) this.stoppedAt.set(lane, done + dt);
             }
-          } else if (sp.kind === 'crossing' && sp.crossing && this.traffic && d > -0.8) {
+          } else if (sp.kind === 'crossing' && sp.crossing && this.traffic && (d > -0.8 || (this.holding === sp && d > -2.2))) {
             const c = sp.crossing;
             let busy = false, near = false;
             for (const p of this.traffic.pedestrians) {
@@ -321,8 +329,14 @@ export class Autopilot {
               else if (p.state === 'wait' && p.hasRight && this.waitTime < 7) busy = true;
               else if (p.state === 'approach' || p.state === 'wait') near = true;
             }
-            if (busy) stopAt(d - 1.0, 'piéton');
-            else if (near && d < 30) vt = Math.min(vt, 5.5);
+            // un arrêt entamé pour des piétons va jusqu'au bout, même si le nez a un peu dépassé le point
+            // d'arrêt (feu piéton passé au vert alors qu'on sortait du carrefour) : on ne repart qu'une fois
+            // le passage libre
+            if (busy) { stopAt(d - 1.0, 'piéton'); this.holding = sp; }
+            else {
+              if (this.holding === sp) this.holding = null;
+              if (near && d < 30) vt = Math.min(vt, 5.5);
+            }
           }
         }
         // entrée de carrefour
@@ -374,6 +388,39 @@ export class Autopilot {
     }
     // véhicule qui précède, usagers devant
     if (gap < Infinity) stopAt(Math.max(0, gap - 2.2 - v * 0.9), this.gapWhat);
+    // reparti au pas au milieu d'un carrefour (après s'y être arrêté pour un piéton, une file…) : avant de
+    // couper la voie d'en face, on regarde de nouveau qui arrive
+    if (seg.link && seg.link.vertex.ends.length >= 3 && v < 2.5 && this.s < seg.line.length * 0.45) {
+      const prev = this.segs[this.k - 1];
+      if (prev && prev.lane && this.mustYield(prev.lane, seg.link, 0, v, true)) stopAt(0.3, 'priorité');
+    }
+    // changement de file : contrôle de la file visée (rétroviseur et angle mort). Un véhicule à notre
+    // hauteur, ou qui nous rattrape, passe d'abord : on attend avant de se déporter, ou l'on se laisse
+    // distancer si le déport est entamé.
+    if (this.traffic) {
+      let chg: Seg | null = null, dChg = -this.s - FRONT;
+      for (let i = this.k; i < Math.min(this.segs.length, this.k + 2); i++) {
+        if (this.segs[i].change) { chg = this.segs[i]; break; }
+        dChg += this.segs[i].line.length;
+      }
+      if (chg && dChg < 14) {
+        const side = chg.change!.side;
+        const rxv = Math.cos(car.heading), rzv = Math.sin(car.heading);
+        for (const o of this.traffic.vehicles) {
+          const dx = o.x - car.x, dz = o.z - car.z;
+          const lat = (dx * rxv + dz * rzv) * side;
+          if (lat < 1.3 || lat > 4.8) continue;
+          const along = dx * car.forwardX + dz * car.forwardZ;
+          const half = (o.length + car.spec.length) / 2;
+          const closing = o.v - v;
+          const beside = Math.abs(along) < half + 1.5;
+          const catching = along < 0 && closing > 0.3 && (-along - half) / closing < 2.5;
+          if (!beside && !catching) continue;
+          if (dChg > 0.5) stopAt(Math.max(0, dChg - 0.5), 'file visée occupée');
+          else if (beside && o.v > v - 1) vt = Math.min(vt, Math.max(0, o.v - 2.5));
+        }
+      }
+    }
     // anticipation : un véhicule en mouvement dont la trajectoire va couper la nôtre au moment où nous
     // y serons (carrefours complexes, où les priorités par branche ne suffisent pas)
     const cross = this.crossingAhead(car, v);
@@ -447,7 +494,7 @@ export class Autopilot {
   }
 
   /** Faut-il céder le passage avant d'emprunter la liaison ? */
-  private mustYield(lane: Lane, link: LaneLink, dLine: number, v: number): boolean {
+  private mustYield(lane: Lane, link: LaneLink, dLine: number, v: number, inside = false): boolean {
     const tr = this.traffic;
     if (!tr) return false;
     const end = lane.endRef;
@@ -496,10 +543,29 @@ export class Autopilot {
       if (oEnd.control === 'signal' && oEnd.controller && oEnd.controller.state(oEnd.group, tr.time) !== 'green') continue;
       if (tr.hasPriorityOver(oEnd, null, end, link, inX, inZ)) return true;
     }
+    // dans une grande place, un véhicule engagé a réservé tout son trajet : s'il doit couper le nôtre et
+    // peut y être avant que nous ayons dégagé, il passe — même s'il est encore plusieurs liaisons en amont
+    for (const o of tr.vehicles) {
+      if (o.v < 1) continue;
+      const r = tr.plannedLinks(o);
+      if (r.length < 2) continue;
+      let d = o.link ? o.link.line.length - o.s : o.lane ? o.lane.line.length - o.s + r[0].line.length : 0;
+      for (let i = 1; i < r.length && d < 90; i++) {
+        d += r[i].from.line.length;
+        const c = r[i];
+        if (c.vertex === link.vertex && c.from !== lane && this.inConflict(link, c)) {
+          const oEnd = c.from.endRef;
+          if (d / Math.max(2, o.v) < need && tr.hasPriorityOver(oEnd, c, end, link, inX, inZ)) return true;
+          break;
+        }
+        d += c.line.length;
+      }
+    }
     for (const o of tr.vehicles) {
       if (o.link) {
         if (o.link.vertex === link.vertex && (this.inConflict(link, o.link))) {
-          if (this.waitTime > 20 && o.v < 0.2) continue;
+          // (déjà au milieu du carrefour : un véhicule immobilisé en face nous attend, on ne l'attend pas)
+          if ((this.waitTime > 20 || inside) && o.v < 0.5) continue;
           return true;
         }
         // véhicule encore dans le carrefour précédent, qui débouche sur le nôtre par un tronçon court
@@ -597,6 +663,8 @@ export class Autopilot {
     return true;
   }
 
+  /** passage piéton devant lequel on est en train de s'arrêter */
+  private holding: object | null = null;
   private gapWhat = '';
   /** l'obstacle le plus proche est-il lent ou arrêté ? */
   private gapSlow = false;
