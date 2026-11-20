@@ -219,11 +219,36 @@ export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: T
     const dest = randomDestination(net, p.x, p.z, dmin, dmax, rng);
     if (!dest) continue;
     const r = findRoute(net, from, fromS, dest, dest.length * 0.5);
-    if (!r || r.steps.length < 3) continue;
+    if (!r || r.steps.length < 3 || !drivable(r)) continue;
     const sc = score(theme, r);
     if (sc > bestScore) { bestScore = sc; best = r; }
   }
   return best;
+}
+
+/**
+ * L'itinéraire est-il praticable sans manœuvre ? On écarte ceux qui comportent une épingle : un virage
+ * de plus de 125°, ou deux virages du même côté enchaînés sur quelques mètres (entrer dans un giratoire
+ * pour en ressortir aussitôt par la branche voisine, par exemple) — une voiture n'y passe pas en une fois.
+ */
+export function drivable(route: Route): boolean {
+  const turnAt = (i: number): number | null => {
+    const a = route.steps[i], b = route.steps[i + 1];
+    if (!b) return null;
+    let best: number | null = null;
+    for (const lane of a.dir > 0 ? a.edge.lanesF : a.edge.lanesB) {
+      for (const l of lane.links) if (l.to.edge === b.edge && l.to.dir === b.dir && (best === null || Math.abs(l.angle) < Math.abs(best))) best = l.angle;
+    }
+    return best;
+  };
+  for (let i = 0; i + 1 < route.steps.length; i++) {
+    const t = turnAt(i);
+    if (t === null) continue;
+    if (Math.abs(t) > 2.2) return false;
+    const next = turnAt(i + 1), mid = route.steps[i + 1].edge;
+    if (next !== null && mid.length < 14 && Math.sign(next) === Math.sign(t) && Math.abs(t + next) > 2.2) return false;
+  }
+  return true;
 }
 
 /** Itinéraire d'examen : plusieurs tronçons variés enchaînés. */

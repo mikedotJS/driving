@@ -93,7 +93,8 @@ export class Autopilot {
    * son virage. `isRoad` vient du terrain (Ground).
    */
   fitToRoad(isRoad: (x: number, z: number) => boolean, wheelbase = 2.583, halfTrack = 0.75) {
-    const STEP = 1, ZONE = 14, MARGIN = 0.32, SIDE = halfTrack + 0.11 + MARGIN;
+    const STEP = 1, ZONE = 16, MARGIN = 0.32, SIDE = halfTrack + 0.11 + MARGIN;
+    const KMAX = 1 / 4.5; // courbure maximale suivie sans élargir (rayon de 4,5 m à l'essieu arrière ; butée vers 3,8 m)
     interface Sample { x: number; z: number; nx: number; nz: number; o: number; active: boolean; seg: number }
     const P: Sample[] = [];
     const bounds: [number, number][] = [];
@@ -112,7 +113,7 @@ export class Autopilot {
     const N = P.length;
     const qx = new Float64Array(N), qz = new Float64Array(N), hx = new Float64Array(N), hz = new Float64Array(N);
     let changed = false;
-    for (let it = 0; it < 40; it++) {
+    for (let it = 0; it < 90; it++) {
       for (let i = 0; i < N; i++) { qx[i] = P[i].x + P[i].nx * P[i].o; qz[i] = P[i].z + P[i].nz * P[i].o; }
       for (let i = 0; i < N; i++) {
         const a = Math.max(0, i - 1), b = Math.min(N - 1, i + 1);
@@ -135,9 +136,29 @@ export class Autopilot {
           for (let j = centre - 4; j <= centre + 4; j++) if (j >= 0 && j < N && P[j].active) push[j] += dir * weight * (1 - Math.abs(j - centre) / 5);
         }
       }
-      if (!bad) break;
+      // rayon de braquage : là où le chemin tourne plus court que la voiture ne le peut, on étale le virage
+      // (le point glisse vers la corde de ses voisins : on commence à tourner plus tôt, on finit plus tard)
+      let tight = 0;
+      const relax = new Float64Array(N);
+      // les bordures priment : les dernières passes ne font plus que ramener les roues sur la chaussée
+      for (let i = 1; i < N - 1 && it < 60; i++) {
+        if (!P[i].active) continue;
+        const ax = qx[i] - qx[i - 1], az = qz[i] - qz[i - 1], bx = qx[i + 1] - qx[i], bz = qz[i + 1] - qz[i];
+        const la = Math.hypot(ax, az), lb = Math.hypot(bx, bz), lc = Math.hypot(ax + bx, az + bz);
+        if (la < 0.2 || lb < 0.2 || lc < 0.2) continue;
+        const kappa = (2 * Math.abs(ax * bz - az * bx)) / (la * lb * lc);
+        if (kappa <= KMAX) continue;
+        tight++;
+        const mx = (qx[i - 1] + qx[i + 1]) / 2 - qx[i], mz = (qz[i - 1] + qz[i + 1]) / 2 - qz[i];
+        relax[i] = (mx * P[i].nx + mz * P[i].nz) * Math.min(1, (kappa - KMAX) / kappa + 0.25);
+      }
+      if (!bad && !tight) break;
       changed = true;
-      for (let i = 0; i < N; i++) if (push[i]) P[i].o = clamp(P[i].o + clamp(push[i], -1, 1) * 0.1, -1.5, 1.5);
+      for (let i = 0; i < N; i++) {
+        if (relax[i]) { P[i].o += relax[i]; if (i > 0 && P[i - 1].active) P[i - 1].o += relax[i] * 0.3; if (i < N - 1 && P[i + 1].active) P[i + 1].o += relax[i] * 0.3; }
+        if (push[i]) P[i].o += clamp(push[i], -1, 1) * 0.1;
+        P[i].o = clamp(P[i].o, -3.2, 3.2);
+      }
       // lissage (les décalages restent nuls hors des zones actives)
       const o2 = new Float64Array(N);
       for (let i = 0; i < N; i++) o2[i] = P[i].active ? ((P[i - 1]?.o ?? P[i].o) + 2 * P[i].o + (P[i + 1]?.o ?? P[i].o)) / 4 : 0;

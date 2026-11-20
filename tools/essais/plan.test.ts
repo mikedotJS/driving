@@ -22,7 +22,7 @@ it('plan', () => {
   if (!process.env.SANS_AJUSTEMENT) ap.fitToRoad((x, z) => ground.isRoad(x, z));
   const A = ap as any;
   // on démarre un peu avant le segment visé
-  const first = Math.max(0, target - 1);
+  const first = Math.max(0, target - +(process.env.AVANT ?? 1));
   A.k = first;
   const l0 = ap.segs[first].lane ?? ap.segs[first - 1].lane!;
   if (!ap.segs[first].lane) A.k = first - 1;
@@ -64,7 +64,7 @@ it('plan', () => {
     poly(e.line, '#06c', 1);
     for (const l of e.allLanes) { poly(l.line, l.kind === 'C' ? '#3a3' : '#bbb', 1); for (const k of l.links) poly(k.line, '#777', 0.6); }
   }
-  for (let i = Math.max(0, target - 1); i <= Math.min(ap.segs.length - 1, target + 1); i++) poly(ap.segs[i].line, '#ff0', 2);
+  for (let i = Math.max(0, target - +(process.env.AVANT ?? 1)); i <= Math.min(ap.segs.length - 1, target + 1); i++) poly(ap.segs[i].line, '#ff0', 2);
   const cols = ['#f80', '#f08', '#0cf', '#0f8'];
   tracks.forEach((tr, i) => {
     out.push(`<polyline fill="none" stroke="${cols[i]}" stroke-width="1.5" points="${tr.map((q) => `${X(q[0])},${Z(q[1])}`).join(' ')}"/>`);
