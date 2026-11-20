@@ -1,0 +1,149 @@
+[
+ {
+  "keys": [
+   "vitesse_5",
+   "vitesse_20",
+   "vitesse_30",
+   "vitesse_40",
+   "vitesse_50",
+   "vitesse_delit",
+   "vitesse_inadaptee",
+   "trop_lent",
+   "feu_rouge"
+  ],
+  "prompt": "Attention à votre vitesse, vous dépassez légèrement la limite. <break time=\"1.6s\" /> Vous roulez trop vite. Ralentissez et respectez la limitation. <break time=\"1.6s\" /> Beaucoup trop vite ! Vous êtes à plus de vingt kilomètres-heure au-dessus de la limite. <break time=\"1.6s\" /> Excès de vitesse très important. Freinez immédiatement. <break time=\"1.6s\" /> Excès de vitesse très important. Freinez immédiatement. <break time=\"1.6s\" /> Grand excès de vitesse : c’est un délit. Arrêtez-vous. <break time=\"1.6s\" /> Votre allure n’est pas adaptée à la situation, même si vous êtes sous la limite. <break time=\"1.6s\" /> Vous pouvez avancer : rien ne justifie de rouler aussi lentement ici. <break time=\"1.6s\" /> Vous venez de griller un feu rouge !"
+ },
+ {
+  "keys": [
+   "feu_orange",
+   "stop",
+   "cedez",
+   "priorite_droite",
+   "giratoire",
+   "priorite_feu",
+   "pieton",
+   "carrefour_encombre",
+   "sens_interdit"
+  ],
+  "prompt": "À l’orange, on s’arrête. Vous aviez la distance pour le faire. <break time=\"1.6s\" /> Vous n’avez pas marqué l’arrêt au stop. <break time=\"1.6s\" /> Refus de priorité : vous deviez céder le passage. <break time=\"1.6s\" /> Refus de priorité à droite ! Sans signalisation, on cède à droite. <break time=\"1.6s\" /> À l’entrée du giratoire, la priorité est à ceux qui sont déjà sur l’anneau. <break time=\"1.6s\" /> En tournant à gauche, vous devez laisser passer les véhicules qui viennent en face. <break time=\"1.6s\" /> Vous n’avez pas laissé passer le piéton ! C’est six points. <break time=\"1.6s\" /> On ne s’engage pas dans un carrefour si l’on risque d’y rester bloqué. <break time=\"1.6s\" /> Sens interdit ! Vous roulez à contresens."
+ },
+ {
+  "keys": [
+   "circulation_gauche",
+   "ligne_continue",
+   "voie_bus",
+   "bande_cyclable",
+   "trottoir",
+   "bordure",
+   "clignotant",
+   "clignotant_oublie",
+   "controle"
+  ],
+  "prompt": "Revenez à droite : vous circulez sur la voie de gauche, à contresens. <break time=\"1.6s\" /> Vous avez franchi une ligne continue. <break time=\"1.6s\" /> Vous êtes dans le couloir de bus, sortez-en. <break time=\"1.6s\" /> Ne roulez pas sur la bande cyclable. <break time=\"1.6s\" /> Vous êtes monté sur le trottoir ! <break time=\"1.6s\" /> Attention, vous avez touché la bordure. <break time=\"1.6s\" /> Vous avez oublié le clignotant. <break time=\"1.6s\" /> Votre clignotant est resté allumé. <break time=\"1.6s\" /> Pensez à contrôler votre angle mort avant de vous déporter."
+ },
+ {
+  "keys": [
+   "klaxon",
+   "distance",
+   "depassement_cycliste",
+   "arret_passage",
+   "ceinture",
+   "frein_main",
+   "feux",
+   "calage",
+   "rapport"
+  ],
+  "prompt": "En ville, le klaxon ne sert qu’en cas de danger immédiat. <break time=\"1.6s\" /> Vous suivez de trop près. Gardez deux secondes de distance. <break time=\"1.6s\" /> Vous êtes passé trop près du cycliste : un mètre minimum en ville. <break time=\"1.6s\" /> Ne vous arrêtez pas sur le passage piéton. <break time=\"1.6s\" /> Votre ceinture ! On l’attache avant de démarrer. <break time=\"1.6s\" /> Vous roulez avec le frein à main serré. <break time=\"1.6s\" /> Allumez vos feux de croisement. <break time=\"1.6s\" /> Vous avez calé. Débrayez, point mort, et redémarrez calmement. <break time=\"1.6s\" /> Débrayez à fond avant de passer la vitesse."
+ },
+ {
+  "keys": [
+   "surregime",
+   "sousregime",
+   "freinage_brusque",
+   "collision",
+   "collision_vehicule",
+   "collision_pieton",
+   "intro_installation",
+   "intro_allure"
+  ],
+  "prompt": "Passez le rapport supérieur, le moteur tourne trop vite. <break time=\"1.6s\" /> Rétrogradez, le moteur est en sous-régime. <break time=\"1.6s\" /> Freinage trop brutal : anticipez davantage. <break time=\"1.6s\" /> Accident ! Vous avez heurté un obstacle. <break time=\"1.6s\" /> Accident ! Vous avez percuté un autre véhicule. <break time=\"1.6s\" /> Vous avez renversé un piéton. Dans la réalité, ce serait dramatique. <break time=\"1.6s\" /> Bienvenue ! On commence par les bases : s’installer, démarrer et s’arrêter. Prenez votre temps. <break time=\"1.6s\" /> Nous allons travailler la boîte de vitesses et la régularité de l’allure. Ici, c’est limité à trente."
+ },
+ {
+  "keys": [
+   "intro_tournants",
+   "intro_priorite",
+   "intro_feux"
+  ],
+  "prompt": "Avant chaque virage : rétroviseurs, clignotant, on ralentit, on rétrograde, puis on tourne en regardant où l’on va. <break time=\"1.6s\" /> Dans ce quartier, presque aucun carrefour n’a de panneau. Sans signalisation, vous cédez le passage à tout ce qui vient de votre droite. Ralentissez et regardez à chaque intersection. <break time=\"1.6s\" /> Sur ce parcours, vous allez rencontrer des feux et des stops. À l’orange on s’arrête, sauf si c’est dangereux. Au stop, les roues s’immobilisent complètement."
+ },
+ {
+  "keys": [
+   "intro_pietons",
+   "intro_giratoire",
+   "intro_circulation"
+  ],
+  "prompt": "Attention aux piétons : dès qu’un piéton s’engage ou montre qu’il veut traverser, vous le laissez passer. En zone de rencontre, il est prioritaire partout et vous roulez à vingt. <break time=\"1.6s\" /> À l’entrée d’un giratoire, vous cédez le passage aux véhicules qui sont sur l’anneau. Clignotant à droite juste après avoir dépassé la sortie qui précède la vôtre. <break time=\"1.6s\" /> Nous allons sur les grands axes. Gardez deux secondes de distance, restez hors des couloirs de bus, et contrôlez votre angle mort avant chaque changement de voie."
+ },
+ {
+  "keys": [
+   "intro_autonomie",
+   "intro_examen",
+   "intro_libre",
+   "step_installation_1",
+   "step_installation_2",
+   "step_installation_3",
+   "step_installation_4",
+   "step_installation_5"
+  ],
+  "prompt": "Vous êtes autonome : installez-vous, démarrez et suivez le GPS jusqu’à destination. Je n’interviens que si nécessaire. <break time=\"1.6s\" /> Bonjour, je suis votre inspecteur. Installez-vous, puis démarrez quand vous êtes prêt. Je vous indiquerai la direction à suivre. <break time=\"1.6s\" /> Conduite libre : allez où vous voulez. Je reste à côté de vous et je vous signale vos erreurs. <break time=\"1.6s\" /> Vérifiez vos rétroviseurs : regardez à gauche, puis à droite. <break time=\"1.6s\" /> Débrayez à fond et démarrez le moteur. <break time=\"1.6s\" /> Passez la première. <break time=\"1.6s\" /> Clignotant à gauche et coup d’œil dans l’angle mort. <break time=\"1.6s\" /> Desserrez le frein à main."
+ },
+ {
+  "keys": [
+   "step_installation_6",
+   "step_installation_7",
+   "step_installation_8",
+   "step_installation_9",
+   "step_allure_1",
+   "step_allure_2",
+   "step_allure_3",
+   "step_allure_4",
+   "step_allure_5"
+  ],
+  "prompt": "Relevez doucement l’embrayage jusqu’au point de patinage, puis accélérez légèrement. <break time=\"1.6s\" /> Vers 15 à 20 km/h, passez la deuxième. <break time=\"1.6s\" /> Clignotant à droite et arrêtez-vous le long du trottoir. <break time=\"1.6s\" /> Point mort, frein à main, coupez le moteur. <break time=\"1.6s\" /> Tenez entre 25 et 30 km/h pendant 12 secondes. <break time=\"1.6s\" /> Ralentissez sous 20 km/h et rétrogradez en deuxième. <break time=\"1.6s\" /> Réaccélérez jusqu’à 30 km/h. <break time=\"1.6s\" /> Freinez pour vous arrêter en douceur, sans à-coup. <break time=\"1.6s\" /> Arrêtez-vous sur la droite : point mort et frein à main."
+ },
+ {
+  "keys": [
+   "nav_d",
+   "nav_far_d",
+   "nav_feu_d",
+   "nav_2_d",
+   "nav_3_d",
+   "nav_g",
+   "nav_far_g",
+   "nav_feu_g",
+   "nav_2_g"
+  ],
+  "prompt": "Tournez à droite. <break time=\"1.6s\" /> À la prochaine intersection, tournez à droite. <break time=\"1.6s\" /> Au feu, vous tournerez à droite. <break time=\"1.6s\" /> Vous prendrez la deuxième à droite. <break time=\"1.6s\" /> Vous prendrez la troisième à droite. <break time=\"1.6s\" /> Tournez à gauche. <break time=\"1.6s\" /> À la prochaine intersection, tournez à gauche. <break time=\"1.6s\" /> Au feu, vous tournerez à gauche. <break time=\"1.6s\" /> Vous prendrez la deuxième à gauche."
+ },
+ {
+  "keys": [
+   "nav_3_g",
+   "nav_gir_1",
+   "nav_gir_2",
+   "nav_gir_3",
+   "nav_gir_4",
+   "nav_arr_far",
+   "nav_arr",
+   "bravo_pieton",
+   "recalcul"
+  ],
+  "prompt": "Vous prendrez la troisième à gauche. <break time=\"1.6s\" /> Au giratoire, prenez la première sortie. <break time=\"1.6s\" /> Au giratoire, prenez la deuxième sortie. <break time=\"1.6s\" /> Au giratoire, prenez la troisième sortie. <break time=\"1.6s\" /> Au giratoire, prenez la quatrième sortie. <break time=\"1.6s\" /> Vous arrivez à destination. Cherchez un endroit pour vous arrêter sur la droite. <break time=\"1.6s\" /> Arrêtez-vous sur la droite en sécurité. <break time=\"1.6s\" /> Bien : vous laissez traverser le piéton. <break time=\"1.6s\" /> Ce n’est pas la bonne rue, mais ce n’est pas grave : je recalcule."
+ },
+ {
+  "keys": [
+   "fin_lecon",
+   "fin_examen"
+  ],
+  "prompt": "Très bien, la leçon est terminée. <break time=\"1.6s\" /> L’épreuve de conduite est terminée. Passons aux questions."
+ }
+]

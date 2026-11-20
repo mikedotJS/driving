@@ -149,6 +149,8 @@ export class Car {
 
   // ── grandeurs dérivées ──
   get speed(): number { return Math.hypot(this.vx, this.vy); }
+  /** le démarreur entraîne-t-il le moteur ? */
+  get cranking(): boolean { return this.starter > 0 && !this.engineRunning; }
   get speedKmh(): number { return this.speed * 3.6; }
   get rpm(): number { return this.engineOmega / RPM; }
   /** vitesse sol → régime moteur dans le rapport courant */

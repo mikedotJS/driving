@@ -222,7 +222,7 @@ export class Player {
       if (rel > 0.6) { ped.hit = true; this.hit('pieton', rel); }
       return; // un piéton n'arrête pas la voiture
     }
-    this.resolve(nx, nz, depth, cx, cz, vx, vz, kind);
+    this.resolve(nx, nz, depth, cx, cz, vx, vz, 'poteau');
   }
 
   /** Rectangle orienté (autre voiture) contre la voiture du joueur : test par axes séparateurs. */

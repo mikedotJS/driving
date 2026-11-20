@@ -204,7 +204,11 @@ export class Controls {
     this.kbSteer = approach(this.kbSteer, dir * maxSteer, rate * dt);
     this.kbThrottle = approach(this.kbThrottle, kd.has('ArrowUp') || kd.has('KeyW') ? 0.85 : 0, (kd.has('ArrowUp') || kd.has('KeyW') ? 1.6 : 4) * dt);
     this.kbBrake = approach(this.kbBrake, kd.has('ArrowDown') || kd.has('KeyS') ? 0.75 : 0, (kd.has('ArrowDown') || kd.has('KeyS') ? 2.2 : 6) * dt);
-    this.kbClutch = approach(this.kbClutch, kd.has('ShiftLeft') || kd.has('ShiftRight') ? 1 : 0, (kd.has('ShiftLeft') || kd.has('ShiftRight') ? 8 : 1.1) * dt);
+    // embrayage au clavier : on relâche vite jusqu'au point de patinage, puis lentement tant que la voiture est presque à l'arrêt
+    const clutchKey = kd.has('ShiftLeft') || kd.has('ShiftRight');
+    const inBite = this.kbClutch < 0.74 && this.kbClutch > 0.34;
+    const release = inBite && v < 3.2 ? 0.3 : 1.6;
+    this.kbClutch = approach(this.kbClutch, clutchKey ? 1 : 0, (clutchKey ? 8 : release) * dt);
 
     let steer = this.kbSteer, throttle = this.kbThrottle, brake = this.kbBrake, clutch = this.kbClutch;
     st.hasClutchPedal = false;

@@ -1,0 +1,619 @@
+// Chef d'orchestre : charge le monde, fait tourner la simulation, relie commandes, physique,
+// circulation, règles, moniteur, affichage et son, et gère leçons, conduite libre et examen.
+
+import * as THREE from 'three';
+import { RoadNet, type MapFile } from '../map/roadnet';
+import { MaterialLib } from '../render/materials';
+import { Sky } from '../render/sun';
+import { PlayerView, VIEW_LABELS } from '../render/view';
+import { TrafficView } from '../render/traffic-view';
+import { City } from '../world/city';
+import { Ground } from '../world/ground';
+import { Props } from '../world/props';
+import { ParkedCars } from '../world/parked';
+import { Traffic } from '../traffic/traffic';
+import { RulesEngine, type FaultEvent, type PlayerState, type Situation } from '../rules/engine';
+import { GRILLE, type Competence } from '../rules/infractions';
+import { Player } from './player';
+import { Controls, type InputState } from '../input/controls';
+import { ForceFeedback, FfbModel } from '../input/ffb';
+import { Hud, type StepView } from '../ui/hud';
+import { Menus, type Bilan, type MenuHost } from '../ui/menus';
+import { CarAudio } from '../audio/car-audio';
+import { Voice } from '../audio/voice';
+import { loadSettings, saveSettings, TRAFFIC_COUNTS, type Settings } from './settings';
+import { EXAM, FREE, LESSONS, START_STREETS, planExam, planRoute, poseOn, quietStreet, startOnStreet, type Lesson, type LessonCtx, type StartPose } from './lessons';
+import { findRoute, RouteFollower, type Route } from '../map/route';
+import { drawQuiz } from './quiz';
+import { clamp, hash32 } from '../core/math';
+
+type State = 'menu' | 'drive' | 'pause' | 'bilan';
+
+interface Session {
+  time: number; distance: number; points: number; amende: number;
+  faults: FaultEvent[]; offRoute: number; praised: number; stalls: number; seed: number;
+}
+
+export class Game implements MenuHost {
+  settings: Settings = loadSettings();
+  controls = new Controls();
+  ffb = new ForceFeedback();
+  private ffbModel = new FfbModel();
+  private hud = new Hud();
+  private menus = new Menus(this);
+  private audio = new CarAudio();
+  private voice = new Voice();
+
+  private renderer!: THREE.WebGLRenderer;
+  private scene = new THREE.Scene();
+  private sky!: Sky;
+  private mats = new MaterialLib();
+  net!: RoadNet;
+  private city!: City;
+  private ground!: Ground;
+  private props!: Props;
+  private parked!: ParkedCars;
+  traffic!: Traffic;
+  private trafficView!: TrafficView;
+  rules!: RulesEngine;
+  player!: Player;
+  private view!: PlayerView;
+
+  state: State = 'menu';
+  lesson: Lesson = FREE;
+  private route: Route | null = null;
+  private follower: RouteFollower | null = null;
+  private step = 0;
+  private ctx: LessonCtx | null = null;
+  session: Session = { time: 0, distance: 0, points: 12, amende: 0, faults: [], offRoute: 0, praised: 0, stalls: 0, seed: 1 };
+  private lastTime = 0;
+  private menuAngle = 0;
+  private menuCenter = { x: 1080, z: -480 };
+  private viewRadius = 300;
+  private fpsAcc = 0; private fpsN = 0; private fpsTimer = 0;
+  private hudTimer = 0;
+  private audioReady = false;
+  private lastInstruction = '';
+  private recalcCooldown = 0;
+  private postGrid = new Map<number, { x: number; z: number; r: number }[]>();
+  private startPose: StartPose | null = null;
+  private introTimer = 0;
+  time = 0;
+
+  // ───────────────────────── chargement ─────────────────────────
+  async init(progress: (ratio: number, text: string) => void) {
+    const canvas = document.getElementById('view') as HTMLCanvasElement;
+    const q = this.settings.quality;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: q !== 'basse', powerPreference: 'high-performance' });
+    this.applyPixelRatio();
+    this.renderer.setSize(innerWidth, innerHeight, false);
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.62;
+    this.scene.fog = new THREE.FogExp2(0xbfd0e0, 0.0015);
+
+    progress(0.05, 'Lecture du plan des rues…');
+    const map = (await (await fetch('maps/montreuil.json')).json()) as MapFile;
+    progress(0.2, 'Construction du réseau routier…');
+    await tick();
+    this.net = new RoadNet(map);
+    progress(0.3, 'Chargement des textures et du ciel…');
+    this.sky = new Sky(this.scene, this.renderer, {
+      shadows: true,
+      cascades: q === 'basse' ? [22, 110] : [16, 55, 210],
+      mapSize: q === 'haute' ? 4096 : q === 'moyenne' ? 2048 : 1024,
+    });
+    await Promise.all([this.mats.load(this.renderer), this.sky.load()]);
+    progress(0.55, 'Mise en place de la signalisation…');
+    await tick();
+    this.ground = new Ground(map);
+    this.city = new City(this.net, this.mats);
+    this.props = new Props(this.net, this.mats, this.ground);
+    this.parked = new ParkedCars(this.net);
+    this.city.decorators.push((k, g) => this.props.populateChunk(k, g), (k, g) => this.parked.populateChunk(k, g));
+    this.scene.add(this.city.group, this.props.group);
+    for (const p of this.props.posts) {
+      const k = (Math.floor(p.x / 16) + 4096) * 8192 + Math.floor(p.z / 16) + 4096;
+      let a = this.postGrid.get(k);
+      if (!a) this.postGrid.set(k, (a = []));
+      a.push(p);
+    }
+
+    progress(0.65, 'Mise en circulation…');
+    const tc = TRAFFIC_COUNTS[this.settings.traffic];
+    this.traffic = new Traffic(this.net, { vehicles: tc.vehicles, pedestrians: tc.pedestrians, seed: 11 });
+    this.trafficView = new TrafficView(this.traffic, this.ground);
+    this.scene.add(this.trafficView.group);
+    this.rules = new RulesEngine(this.net, this.traffic);
+    this.player = new Player(this.ground, this.net, this.traffic);
+    this.player.boxes = (x, z, r) => this.parked.near(x, z, r);
+    this.player.posts = (x, z, r) => this.postsNear(x, z, r);
+    this.view = new PlayerView(this.scene, this.renderer, innerWidth / innerHeight);
+
+    this.wire();
+    this.applySettings();
+
+    progress(0.75, 'Construction du quartier…');
+    const start = quietStreet(this.net, 1080, -480) ?? startOnStreet(this.net, 'Rue de Paris');
+    if (start) this.menuCenter = { x: start.x, z: start.z };
+    this.player.spawn(this.menuCenter.x, this.menuCenter.z, start?.heading ?? 0);
+    // construction progressive pour laisser l'écran de chargement se rafraîchir
+    for (let r = 100; r <= this.viewRadius; r += 100) {
+      this.city.ensureAround(this.menuCenter.x, this.menuCenter.z, r);
+      progress(0.75 + 0.2 * (r / this.viewRadius), 'Construction du quartier…');
+      await tick();
+    }
+    addEventListener('resize', () => this.resize());
+    document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'drive') this.pause(); });
+    progress(1, 'Prêt');
+    this.state = 'menu';
+    this.menus.main();
+    this.lastTime = performance.now();
+    requestAnimationFrame((t) => this.frame(t));
+  }
+
+  private postsNear(x: number, z: number, r: number) {
+    const out: { x: number; z: number; r: number }[] = [];
+    for (let i = Math.floor((x - r) / 16); i <= Math.floor((x + r) / 16); i++) {
+      for (let j = Math.floor((z - r) / 16); j <= Math.floor((z + r) / 16); j++) {
+        const a = this.postGrid.get((i + 4096) * 8192 + j + 4096);
+        if (a) for (const p of a) if (Math.abs(p.x - x) < r && Math.abs(p.z - z) < r) out.push(p);
+      }
+    }
+    return out;
+  }
+
+  private applyPixelRatio() {
+    const q = this.settings.quality;
+    const dpr = window.devicePixelRatio || 1;
+    this.renderer.setPixelRatio(q === 'haute' ? Math.min(dpr, 2) : q === 'moyenne' ? Math.min(dpr, 1.25) : Math.min(dpr, 1));
+  }
+  private resize() {
+    this.renderer.setSize(innerWidth, innerHeight, false);
+    this.view.setAspect(innerWidth / innerHeight);
+  }
+
+  // ───────────────────────── câblage des événements ─────────────────────────
+  private wire() {
+    const exam = () => this.lesson.id === 'examen';
+    this.rules.onFault = (f) => {
+      if (f.inf.id === 'controle' && !this.settings.strict) { this.rules.faults.pop(); return; }
+      const s = this.session;
+      s.faults.push(f);
+      s.points = Math.max(0, s.points - f.inf.points);
+      s.amende += f.inf.amende;
+      if (f.inf.id === 'calage') s.stalls++;
+      this.hud.setScore(s.points, s.amende, s.faults.filter((x) => x.inf.severity !== 'conseil').length);
+      if (exam()) return; // l'inspecteur ne commente pas pendant l'épreuve
+      this.hud.fault(f);
+      this.voice.say(f.inf.moniteur, f.inf.id, f.inf.severity === 'grave');
+      if (this.audioReady) this.audio.play('chime', f.inf.severity === 'grave' ? 1 : 0.6);
+    };
+    this.rules.onPraise = (text) => {
+      this.session.praised++;
+      if (exam()) return;
+      this.hud.coach(text, '', true, 4);
+      this.voice.say(text, 'bravo_pieton');
+    };
+    const P = this.player;
+    P.events.collision = (kind, speed) => {
+      const id = kind === 'pieton' ? 'collision_pieton' : kind === 'vehicule' ? 'collision_vehicule' : 'collision';
+      this.rules.report(id, P.car, `choc à ${Math.round(speed * 3.6)} km/h`);
+      if (this.audioReady) this.audio.play('crash', clamp(speed / 8, 0.25, 1));
+      this.ffbModel.jolt(clamp(speed / 6, 0.2, 0.9), Math.random() < 0.5 ? 1 : -1);
+    };
+    P.events.kerb = (wheel, up, speed) => {
+      if (this.audioReady) this.audio.play('kerb', clamp(speed / 6, 0.3, 1));
+      this.ffbModel.jolt(clamp(speed / 10, 0.1, 0.5) * (up ? 1 : 0.5), wheel % 2 ? -1 : 1);
+    };
+    P.events.message = (text) => { this.hud.coach(text, '', false, 5); };
+    P.events.horn = (on) => { if (!this.audioReady) return; if (on) this.audio.hornOn(); else this.audio.hornOff(); };
+    P.events.sound = (name) => { if (this.audioReady && name !== 'tick') this.audio.play(name); };
+    P.car.events.grind = () => { if (this.audioReady) this.audio.play('grind'); this.rules.report('rapport', P.car); };
+    P.car.events.started = () => { this.hud.coach('Moteur démarré.', '', true, 2.5); };
+    this.controls.onDeviceChange = (name, kind) => {
+      this.hud.setDevice(kind === 'wheel' ? `Volant : ${name}` : kind === 'pad' ? `Manette : ${name}` : 'Clavier');
+      this.applySettings();
+      if (this.state === 'menu' && this.menus.open) this.menus.main();
+    };
+    this.hud.setDevice('Clavier');
+    this.voice.onSpeak = (active) => { if (this.audioReady) this.audio.duck(active ? 0.45 : 0); };
+    // le son ne peut démarrer qu'après un geste de l'utilisateur
+    const unlock = () => { void this.initAudio(); };
+    addEventListener('pointerdown', unlock, { once: true });
+    addEventListener('keydown', unlock, { once: true });
+  }
+
+  private async initAudio() {
+    if (this.audioReady) return;
+    try {
+      await this.audio.init();
+      this.audioReady = this.audio.ready;
+      this.audio.setMasterVolume(this.settings.volume);
+      this.audio.setAmbience(0.5);
+      await this.voice.init(this.audio.context, this.audio.voiceBus);
+    } catch (e) { console.warn('Audio indisponible', e); }
+  }
+
+  // ───────────────────────── réglages ─────────────────────────
+  applySettings() {
+    const s = this.settings;
+    const c = this.controls;
+    if (c.profile) { c.profile.rangeDeg = s.wheelRange; c.profile.hShifter = s.hShifter; }
+    c.brakeGamma = s.brakeGamma;
+    if (this.player) this.player.car.mode = s.transmission;
+    if (this.view) {
+      this.view.fov = s.fov; this.view.lookIntoTurns = s.lookIntoTurns;
+      this.view.mirrorsEnabled = s.mirrors;
+      this.view.mirrorRate = s.quality === 'haute' ? 3 : 1;
+    }
+    this.viewRadius = s.quality === 'haute' ? 380 : s.quality === 'moyenne' ? 300 : 220;
+    if (this.renderer) this.applyPixelRatio(), this.renderer.setSize(innerWidth, innerHeight, false);
+    if (this.traffic) {
+      const tc = TRAFFIC_COUNTS[s.traffic];
+      const k = this.lesson.traffic === 'aucun' ? 0 : this.lesson.traffic === 'faible' ? 0.45 : 1;
+      this.traffic.opts.vehicles = Math.round(tc.vehicles * k);
+      this.traffic.opts.pedestrians = Math.round(tc.pedestrians * (this.lesson.traffic === 'aucun' ? 0.25 : k));
+    }
+    this.voice.enabled = s.voice; this.voice.volume = s.volume;
+    if (this.audioReady) this.audio.setMasterVolume(s.volume);
+    this.hud.showMinimap = s.minimap;
+    (document.getElementById('minimap') as HTMLElement).style.display = s.minimap ? '' : 'none';
+    (document.getElementById('dash') as HTMLElement).style.display = s.hud ? '' : 'none';
+  }
+
+  // ───────────────────────── déroulement d'une séance ─────────────────────────
+  start(lesson: Lesson) {
+    void this.initAudio();
+    this.lesson = lesson;
+    const seed = hash32(lesson.id + Math.floor(Date.now() / 60000));
+    this.session = { time: 0, distance: 0, points: 12, amende: 0, faults: [], offRoute: 0, praised: 0, stalls: 0, seed };
+    this.rules.reset();
+    this.rules.enabled = true;
+    this.hud.clearFaults();
+    this.hud.setScore(12, 0, 0);
+    this.applySettings();
+
+    // point de départ
+    let pose: StartPose | null = null;
+    if (lesson.theme === 'bases' || lesson.theme === 'allure') pose = quietStreet(this.net, 1080, -480);
+    else {
+      const names = START_STREETS[lesson.theme];
+      for (let i = 0; i < names.length && !pose; i++) pose = startOnStreet(this.net, names[(seed + i) % names.length], 0.25);
+    }
+    pose ??= quietStreet(this.net, 1080, -480) ?? poseOn(this.net.edges[0], 1, this.net.edges[0].length / 2);
+    pose = this.freeSpot(pose);
+    this.startPose = pose;
+    const P = this.player;
+    P.car.mode = this.settings.transmission;
+    P.spawn(pose.x, pose.z, pose.heading, { running: lesson.ready, belt: lesson.ready });
+    if (lesson.ready) P.handbrake = true;
+
+    // itinéraire
+    this.route = null; this.follower = null;
+    if (lesson.theme === 'examen') this.route = planExam(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, seed);
+    else if (lesson.steps.some((st) => st.text === 'Suivez les indications du moniteur jusqu’à l’arrivée')) this.route = planRoute(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, lesson.theme, seed);
+    if (this.route) this.follower = new RouteFollower(this.route);
+    this.step = 0;
+    this.ctx = { player: P, sit: this.rules.situation, input: this.controls.state, t: 0, dist: 0, mem: {}, auto: P.car.mode === 'auto', routeDone: false };
+
+    this.city.ensureAround(pose.x, pose.z, 160);
+    this.traffic.vehicles.forEach((v) => { v.alive = false; });
+    this.traffic.pedestrians.forEach((p) => { p.alive = false; });
+    this.menus.close();
+    this.hud.show(true);
+    this.state = 'drive';
+    this.view.mode = 'cockpit';
+    this.introTimer = 1.2;
+    this.lastInstruction = lesson.intro;
+    this.updateSteps();
+  }
+
+  /** Décale le départ le long de la rue jusqu'à trouver une place dégagée (rien 11 m devant, 6 m derrière). */
+  private freeSpot(pose: StartPose): StartPose {
+    const e = pose.edge;
+    const lo = e.endA.trim + 8, hi = e.length - e.endB.trim - 8;
+    const clear = (p: StartPose) => {
+      const fx = Math.sin(p.heading), fz = -Math.cos(p.heading);
+      for (const b of this.parked.near(p.x, p.z, 14)) {
+        const ahead = (b.x - p.x) * fx + (b.z - p.z) * fz;
+        const lat = Math.abs((b.x - p.x) * -fz + (b.z - p.z) * fx);
+        if (lat < 1.9 && ahead > -6.5 - b.halfLen && ahead < 11 + b.halfLen) return false;
+      }
+      return !e.crossings.some((c) => Math.abs(c.s - p.s) < c.halfLen + 7);
+    };
+    if (clear(pose)) return pose;
+    for (let k = 1; k <= 30; k++) {
+      for (const sgn of [1, -1]) {
+        const s = pose.s + sgn * k * 2.5;
+        if (s < lo || s > hi) continue;
+        const p = poseOn(e, pose.dir, s);
+        if (clear(p)) return p;
+      }
+    }
+    // aucune place libre : départ sur la voie de circulation
+    const lanes = pose.dir > 0 ? e.lanesF : e.lanesB;
+    const lane = lanes[lanes.length - 1];
+    if (lane) { const q = e.line.atOffset(pose.s, lane.off); return { ...pose, x: q.x, z: q.z }; }
+    return pose;
+  }
+
+  restart() { this.start(this.lesson); }
+
+  resume() {
+    this.menus.close();
+    this.state = 'drive';
+    this.lastTime = performance.now();
+  }
+
+  pause() {
+    if (this.state !== 'drive') return;
+    this.state = 'pause';
+    this.ffb.stop();
+    this.voice.stop();
+    this.menus.pause(this.lesson);
+  }
+
+  /** Termine la séance et affiche le bilan. */
+  quit(completed = false) {
+    this.ffb.stop();
+    this.voice.stop();
+    const s = this.session;
+    const graves = s.faults.filter((f) => f.inf.severity === 'grave').length;
+    const fautes = s.faults.filter((f) => f.inf.severity === 'faute').length;
+    const conseils = s.faults.filter((f) => f.inf.severity === 'conseil').length;
+    const stars = graves ? 0 : fautes === 0 && conseils <= 2 ? 3 : fautes <= 2 ? 2 : 1;
+    const bilan: Bilan = {
+      lesson: this.lesson, faults: s.faults, duration: s.time, distance: s.distance, points: s.points, amende: s.amende,
+      stars, success: completed && graves === 0,
+    };
+    const finish = () => {
+      if (bilan.success && this.lesson.num > 0 && this.lesson.id !== 'examen') {
+        this.settings.progress[this.lesson.id] = Math.max(this.settings.progress[this.lesson.id] ?? 0, stars);
+        saveSettings(this.settings);
+      }
+      this.state = 'bilan';
+      this.hud.show(false);
+      this.menus.bilan(bilan, () => { this.state = 'menu'; this.menuCenter = { x: this.player.car.x, z: this.player.car.z }; this.menus.main(); });
+    };
+    if (this.lesson.id === 'examen' && completed) {
+      this.state = 'bilan';
+      this.hud.show(false);
+      this.menus.quiz(drawQuiz(s.seed), (score) => { bilan.exam = this.examResult(score); bilan.success = !bilan.exam.eliminated && bilan.exam.total >= 20; finish(); });
+    } else {
+      if (this.lesson.id === 'examen') bilan.exam = this.examResult(0);
+      finish();
+    }
+  }
+
+  /** Notation selon la grille officielle (31 points). */
+  private examResult(quiz: number): NonNullable<Bilan['exam']> {
+    const s = this.session;
+    const by = (c: Competence) => s.faults.filter((f) => f.inf.competence === c);
+    let eliminated = false;
+    const rows: NonNullable<Bilan['exam']>['rows'] = [];
+    let total = 0;
+    for (const g of GRILLE) {
+      for (const it of g.items) {
+        let score: number | 'E' = it.max;
+        if (it.id === 'verifications') score = quiz;
+        else if (it.id === 'analyse') score = Math.max(0, 1 - 0.5 * by('information').length);
+        else if (it.id === 'adaptation') score = Math.max(0, 1 - 0.5 * by('allure').length);
+        else if (it.id === 'autonomie') score = Math.max(0, 1 - 0.5 * s.offRoute);
+        else if (it.id === 'courtoisie') score = by('courtoisie').length || s.faults.some((f) => f.inf.id === 'pieton') ? 0 : 1;
+        else if (it.id === 'economie') score = by('economie').length > 1 || s.stalls > 2 ? 0 : 1;
+        else {
+          const fs = by(it.id as Competence);
+          if (fs.some((f) => f.inf.severity === 'grave')) { score = 'E'; eliminated = true; }
+          else score = Math.max(0, Math.round(it.max - fs.reduce((a, f) => a + (f.inf.severity === 'faute' ? 1 : 0.5), 0)));
+        }
+        if (typeof score === 'number') total += score;
+        rows.push({ bloc: g.bloc, label: it.label, score, max: it.max });
+      }
+    }
+    return { rows, total: Math.round(total * 2) / 2, eliminated };
+  }
+
+  private say(text: string, key: string | null = null, sub = '') {
+    this.lastInstruction = text;
+    this.hud.coach(text, sub, false, 7);
+    this.voice.say(text, key);
+  }
+
+  private updateSteps() {
+    const L = this.lesson;
+    if (!L.steps.length) { this.hud.setSteps('', null); return; }
+    const auto = this.player.car.mode === 'auto';
+    const views: StepView[] = L.steps.map((st, i) => ({
+      text: typeof st.text === 'function' ? st.text(auto) : st.text,
+      hint: typeof st.hint === 'function' ? st.hint(auto) : st.hint,
+      state: i < this.step ? 'done' : i === this.step ? 'cur' : 'todo',
+    }));
+    this.hud.setSteps(L.num && L.id !== 'examen' ? `Leçon ${L.num} · ${L.title}` : L.title, views);
+  }
+
+  private replaceCar() {
+    const c = this.player.car;
+    const loc = this.net.locate(c.x, c.z);
+    if (!loc) return;
+    const e = loc.edge;
+    const fx = c.forwardX, fz = c.forwardZ;
+    let dir: 1 | -1 = fx * loc.tx + fz * loc.tz >= 0 ? 1 : -1;
+    if (dir > 0 && !e.lanesF.length) dir = -1;
+    if (dir < 0 && !e.lanesB.length) dir = 1;
+    const lanes = dir > 0 ? e.lanesF : e.lanesB;
+    const lane = lanes[lanes.length - 1];
+    const s = clamp(loc.s, e.endA.trim + 4, Math.max(e.endA.trim + 4, e.length - e.endB.trim - 4));
+    const p = e.line.atOffset(s, lane ? lane.off : 0);
+    const running = c.engineRunning;
+    const gear = c.gear, lever = c.lever, sel = c.selector;
+    c.reset(p.x, p.z, Math.atan2(p.tx * dir, -p.tz * dir));
+    c.gear = gear; c.lever = lever; c.selector = sel;
+    if (!running) c.stopEngine();
+    this.hud.coach('Voiture replacée sur la chaussée.', '', false, 3);
+  }
+
+  // ───────────────────────── boucle principale ─────────────────────────
+  private frame(now: number) {
+    requestAnimationFrame((t) => this.frame(t));
+    const dt = clamp((now - this.lastTime) / 1000, 0.001, 0.05);
+    this.lastTime = now;
+    this.time += dt;
+    this.controls.speedHint = this.player.car.vx;
+    this.controls.enabled = this.state === 'drive';
+    const input = this.controls.update(dt);
+    let fx: number, fz: number;
+
+    if (this.state === 'drive') {
+      this.driveFrame(dt, input);
+      fx = this.player.car.x; fz = this.player.car.z;
+    } else {
+      // menu : la caméra tourne lentement au-dessus du quartier
+      if (input.pressed.has('pause') && this.state === 'pause') this.resume();
+      this.menuAngle += dt * 0.05;
+      const c = this.menuCenter;
+      if (this.state !== 'pause') {
+        this.traffic.update(dt, { x: c.x, z: c.z, heading: 0, speed: 0, length: 4, width: 1.8, approach: null, approachDist: Infinity, inJunction: null, left: false, right: false });
+        const cam = this.view.camera;
+        cam.layers.disable(1); cam.layers.enable(2);
+        cam.position.set(c.x + Math.sin(this.menuAngle) * 55, 26, c.z + Math.cos(this.menuAngle) * 55);
+        cam.lookAt(c.x, 3, c.z);
+        cam.updateMatrixWorld();
+      }
+      fx = c.x; fz = c.z;
+    }
+    this.trafficView.update(this.state === 'pause' ? 0 : dt);
+    this.props.update(this.traffic.time);
+    this.city.update(fx, fz, this.viewRadius, 4);
+    this.sky.update(fx, fz);
+    if (this.state === 'drive') this.view.renderMirrors();
+    this.renderer.render(this.scene, this.view.camera);
+
+    // images par seconde
+    this.fpsAcc += dt; this.fpsN++; this.fpsTimer += dt;
+    if (this.fpsTimer > 1) { this.hud.setFps(`${Math.round(this.fpsN / this.fpsAcc)} i/s`); this.fpsAcc = 0; this.fpsN = 0; this.fpsTimer = 0; }
+  }
+
+  /** Avance la simulation sans rendu (essais automatisés et mise au point). */
+  debugStep(seconds: number, dt = 1 / 60) {
+    for (let t = 0; t < seconds && this.state === 'drive'; t += dt) {
+      this.time += dt;
+      this.controls.speedHint = this.player.car.vx;
+      this.driveFrame(dt, this.controls.update(dt));
+    }
+  }
+
+  private driveFrame(dt: number, input: InputState) {
+    const P = this.player, c = P.car, s = this.session;
+    if (input.pressed.has('pause')) { this.pause(); return; }
+    if (input.pressed.has('camera')) this.hud.coach(VIEW_LABELS[this.view.cycle()], '', false, 1.5);
+    if (input.pressed.has('reset')) this.replaceCar();
+    if (input.pressed.has('repeat')) { this.hud.coach(this.lastInstruction, '', false, 6); this.voice.say(this.lastInstruction, null, true); }
+
+    P.update(dt, input);
+    s.time += dt;
+    s.distance += Math.abs(c.vx) * dt;
+
+    const ps: PlayerState = {
+      car: c, indicator: P.indicator, hazards: P.hazards, seatbelt: P.seatbelt, lights: P.lights, handbrake: P.handbrake, horn: P.horn,
+      lookLeftAt: P.lookLeftAt - (P.time - this.rules.time), lookRightAt: P.lookRightAt - (P.time - this.rules.time), lookBackAt: P.lookBackAt - (P.time - this.rules.time), night: false,
+    };
+    const sit = this.rules.update(dt, ps);
+    this.traffic.update(dt, this.rules.playerInfo(ps));
+
+    // introduction
+    if (this.introTimer > 0) {
+      this.introTimer -= dt;
+      if (this.introTimer <= 0) this.say(this.lesson.intro, 'intro_' + this.lesson.id);
+    }
+
+    this.lessonFrame(dt, sit, input);
+
+    // retour de force
+    const frontLoad = (c.fz[0] + c.fz[1]) / (c.spec.mass * 9.81 * 0.605);
+    this.ffb.setForce(this.ffbModel.compute(dt, {
+      steerTorque: c.steerTorque, steer: input.steer, steerRate: input.steerRate, speed: c.speed, abs: c.absActive,
+      engineOn: c.engineRunning, rpm: c.rpm, damping: this.ffb.settings.damping, frontLoad,
+    }));
+
+    // son
+    if (this.audioReady) {
+      let slip = 0;
+      for (let i = 0; i < 4; i++) slip = Math.max(slip, c.slip[i]);
+      this.audio.update({
+        engineOn: c.engineRunning, starter: c.cranking, rpm: c.rpm, load: c.throttleEff, speed: c.speed,
+        slip: c.speed > 2 ? slip : 0, brake: c.brakePressure, abs: c.absActive, surface: sit.edge?.sett ? 'sett' : 'asphalt',
+        indicator: P.hazards || P.indicator !== 0, clutchSlip: Math.abs(c.clutchSlip),
+      }, dt);
+      const fx = c.forwardX, fz = c.forwardZ;
+      for (const { v, d } of this.trafficView.nearest(c.x, c.z, 4)) {
+        if (d > 60) continue;
+        const pan = clamp(((v.x - c.x) * -fz + (v.z - c.z) * fx) / Math.max(4, d), -1, 1);
+        this.audio.setNearbyVehicle(v.id, d, pan, v.v, v.kind === 'bus' ? 'bus' : 'car');
+      }
+    }
+
+    this.view.update(dt, P, input, sit.limit);
+
+    // affichage
+    this.hudTimer -= dt;
+    const gear = c.mode === 'auto' ? c.selector : c.gear === 0 ? 'N' : c.gear < 0 ? 'R' : String(c.gear);
+    this.hud.setDash({
+      speed: Math.abs(c.vx) * 3.6, limit: sit.limit, gear, rpm: c.rpm, left: P.leftOn, right: P.rightOn,
+      belt: P.seatbelt, handbrake: P.handbrake, engine: c.engineRunning ? 'on' : c.ignition ? 'stalled' : 'off', lights: P.lights,
+      throttle: input.throttle, brake: input.brake, clutch: c.mode === 'manual' ? input.clutch : c.clutchPedal,
+    });
+    if (this.hudTimer <= 0) {
+      this.hudTimer = 0.12;
+      const zone = sit.edge ? (sit.edge.living ? 'zone de rencontre' : sit.limit === 30 ? 'zone 30' : '') : 'hors chaussée';
+      this.hud.setStreet(sit.street, zone);
+      this.hud.setNav(this.follower && !this.follower.done ? this.follower.next() : null);
+      if (this.settings.minimap) this.hud.drawMinimap(this.net, c.x, c.z, c.heading, this.route, this.follower?.step ?? 0);
+    }
+  }
+
+  private lessonFrame(dt: number, sit: Situation, input: InputState) {
+    const L = this.lesson, ctx = this.ctx!;
+    const c = this.player.car;
+    // guidage
+    if (this.follower) {
+      const f = this.follower;
+      const msg = f.update(dt, sit.edge, sit.dir, sit.sFront, Math.abs(c.vx));
+      if (msg) this.say(msg.text, msg.key);
+      this.recalcCooldown -= dt;
+      if (f.offRoute > 5 && sit.edge && this.recalcCooldown <= 0 && Math.abs(c.vx) > 1) {
+        const last = this.route!.steps[this.route!.steps.length - 1];
+        const r = findRoute(this.net, { edge: sit.edge, dir: sit.dir }, sit.loc!.s, last.edge, last.edge.length * 0.5);
+        this.recalcCooldown = 8;
+        if (r) {
+          this.route = r; this.follower = new RouteFollower(r);
+          this.session.offRoute++;
+          this.say(L.id === 'examen' ? 'Ce n’est pas grave, je vous indique un autre chemin.' : 'Ce n’est pas la bonne rue, mais ce n’est pas grave : je recalcule.', 'recalcul');
+        }
+      }
+      ctx.routeDone = f.done || (f.step === this.route!.steps.length - 1 && sit.sFront >= this.route!.endS - 15);
+    }
+    if (!L.steps.length) return;
+    ctx.t += dt; ctx.dist += Math.abs(c.vx) * dt;
+    ctx.sit = sit; ctx.input = input; ctx.auto = c.mode === 'auto';
+    const st = L.steps[this.step];
+    if (st && st.done(ctx)) {
+      this.step++;
+      ctx.t = 0; ctx.dist = 0; ctx.mem = {};
+      this.updateSteps();
+      if (this.step >= L.steps.length) {
+        this.hud.coach(L.id === 'examen' ? 'L’épreuve de conduite est terminée.' : 'Leçon terminée, bravo !', '', true, 4);
+        this.voice.say(L.id === 'examen' ? 'L’épreuve de conduite est terminée. Passons aux questions.' : 'Très bien, la leçon est terminée.', L.id === 'examen' ? 'fin_examen' : 'fin_lecon');
+        setTimeout(() => { if (this.state === 'drive') this.quit(true); }, 2600);
+      } else {
+        const next = L.steps[this.step];
+        const text = typeof next.text === 'function' ? next.text(ctx.auto) : next.text;
+        if (L.theme === 'bases' || L.theme === 'allure') this.say(text + '.', `step_${L.id}_${this.step}`);
+      }
+    }
+  }
+}
+
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+// rend les leçons accessibles aux outils de test
+export { LESSONS, EXAM, FREE };

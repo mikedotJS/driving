@@ -145,15 +145,45 @@ export function describe(steps: RouteStep[], fromS: number, toS: number): Route 
 
 const ORD = ['', 'première', 'deuxième', 'troisième', 'quatrième', 'cinquième'];
 
+export interface Instruction {
+  /** texte affiché (avec le nom de la rue) */
+  text: string;
+  /** clé de l'enregistrement vocal correspondant (sans nom de rue) */
+  key: string;
+  /** phrase prononcée par l'enregistrement */
+  spoken: string;
+}
+
 /** Consigne formulée comme à l'examen. `far` = annonce anticipée. */
-export function instruction(m: Maneuver, far: boolean): string {
-  if (m.kind === 'arrivee') return far ? 'Vous arrivez à destination. Cherchez un endroit pour vous arrêter sur la droite.' : 'Arrêtez-vous sur la droite en sécurité.';
-  if (m.kind === 'giratoire') return `Au giratoire, prenez la ${ORD[Math.min(5, m.exit)]} sortie${m.street ? `, ${m.street}` : ''}.`;
-  const side = m.kind === 'droite' ? 'à droite' : 'à gauche';
-  if (!far) return `Tournez ${side}${m.street ? `, ${m.street}` : ''}.`;
-  if (m.signal) return `Au feu, vous tournerez ${side}${m.street ? `, ${m.street}` : ''}.`;
-  if (m.ordinal >= 2 && m.ordinal <= 3) return `Vous prendrez la ${ORD[m.ordinal]} ${side}${m.street ? `, ${m.street}` : ''}.`;
-  return `À la prochaine intersection, tournez ${side}${m.street ? `, ${m.street}` : ''}.`;
+export function instruction(m: Maneuver, far: boolean): Instruction {
+  const street = m.street ? `, ${m.street}` : '';
+  const mk = (spoken: string, key: string, withStreet = true): Instruction => ({ spoken, key, text: withStreet && street ? spoken.replace(/\.$/, '') + street + '.' : spoken });
+  if (m.kind === 'arrivee') {
+    return far ? mk('Vous arrivez à destination. Cherchez un endroit pour vous arrêter sur la droite.', 'nav_arr_far', false) : mk('Arrêtez-vous sur la droite en sécurité.', 'nav_arr', false);
+  }
+  if (m.kind === 'giratoire') { const n = Math.min(4, Math.max(1, m.exit)); return mk(`Au giratoire, prenez la ${ORD[n]} sortie.`, `nav_gir_${n}`); }
+  const d = m.kind === 'droite';
+  const side = d ? 'à droite' : 'à gauche', k = d ? 'd' : 'g';
+  if (!far) return mk(`Tournez ${side}.`, `nav_${k}`);
+  if (m.signal) return mk(`Au feu, vous tournerez ${side}.`, `nav_feu_${k}`);
+  if (m.ordinal >= 2 && m.ordinal <= 3) return mk(`Vous prendrez la ${ORD[m.ordinal]} ${side}.`, `nav_${m.ordinal}_${k}`);
+  return mk(`À la prochaine intersection, tournez ${side}.`, `nav_far_${k}`);
+}
+
+/** Toutes les consignes génériques (pour l'enregistrement des voix). */
+export function allInstructions(): Instruction[] {
+  const out: Instruction[] = [];
+  const base = { step: 0, vertex: null as unknown as Vertex, exit: 0, at: 0, street: '' };
+  for (const kind of ['droite', 'gauche'] as const) {
+    out.push(instruction({ ...base, kind, ordinal: 1, signal: false }, false));
+    out.push(instruction({ ...base, kind, ordinal: 1, signal: false }, true));
+    out.push(instruction({ ...base, kind, ordinal: 1, signal: true }, true));
+    out.push(instruction({ ...base, kind, ordinal: 2, signal: false }, true));
+    out.push(instruction({ ...base, kind, ordinal: 3, signal: false }, true));
+  }
+  for (let n = 1; n <= 4; n++) out.push(instruction({ ...base, kind: 'giratoire', exit: n, ordinal: 1, signal: false }, true));
+  out.push(instruction({ ...base, kind: 'arrivee', ordinal: 1, signal: false }, true), instruction({ ...base, kind: 'arrivee', ordinal: 1, signal: false }, false));
+  return out;
 }
 
 /** Suivi de la progression du joueur le long d'un itinéraire. */
@@ -167,7 +197,7 @@ export class RouteFollower {
   constructor(public route: Route) {}
 
   /** Met à jour avec la position courante ; renvoie une consigne à annoncer, ou null. */
-  update(dt: number, edge: Edge | null, dir: 1 | -1, sTravel: number, speed: number): string | null {
+  update(dt: number, edge: Edge | null, dir: 1 | -1, sTravel: number, speed: number): Instruction | null {
     const r = this.route;
     if (this.done) return null;
     if (!edge) { this.offRoute += dt; return null; }
