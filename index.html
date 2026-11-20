@@ -109,6 +109,8 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 6px; border-radius: 
 #hud.cockpit #minimap { display: none; }
 #hud.cockpit #street { left: 18px; bottom: 78px; transform: none; }
 #device { position: absolute; right: 18px; bottom: 18px; font-size: 12px; color: var(--muted); padding: 6px 10px; }
+#demo { position: absolute; left: 50%; top: 16px; transform: translateX(-50%); padding: 8px 16px; font-size: 13px; font-weight: 600; color: #fff; background: rgba(37, 99, 235, 0.92); border-radius: 999px; display: none; white-space: nowrap; }
+#demo.on { display: block; }
 #fps { position: absolute; right: 18px; bottom: 54px; font: 11px ui-monospace, monospace; color: #7d8898; }
 
 /* ── menus ── */
@@ -196,6 +198,7 @@ table.keys td { padding: 6px 4px; border-bottom: 1px solid var(--line); } table.
   </div>
   <div id="fps"></div>
   <div id="device" class="panel"></div>
+  <div id="demo">Démonstration · le moniteur conduit — freinez ou appuyez sur O pour reprendre la main</div>
 </div>
 
 <div id="ui"></div>

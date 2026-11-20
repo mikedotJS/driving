@@ -1,7 +1,56 @@
 {
-  "flow_id": "b8Puz741lqjuAzjdzhp4",
-  "voice_id": "69ujSsYIBOGW4duCBBSW",
-  "voice_name": "Bastien - Calm & Clear French Teacher",
-  "model_id": "eleven_multilingual_v2",
-  "lots": { "0": ["MvZzZ8DxZ8IkdoO1Bj0U", "lj9TClVeKxvlG5C9grPE"] }
+ "flow_id": "b8Puz741lqjuAzjdzhp4",
+ "voice_id": "69ujSsYIBOGW4duCBBSW",
+ "voice_name": "Bastien - Calm & Clear French Teacher",
+ "model_id": "eleven_multilingual_v2",
+ "lots": [
+  [
+   "MvZzZ8DxZ8IkdoO1Bj0U",
+   "lj9TClVeKxvlG5C9grPE"
+  ],
+  [
+   "y8zz2OLp0IETspUi0w6k",
+   "XdHOY9du5DOzl0IsTr5f"
+  ],
+  [
+   "UU8qhESgHmP3MDqlaU1m",
+   "oGAjlPZycWFgWbrEg68M"
+  ],
+  [
+   "pUJdqYPjSqkjHjyzAY3M",
+   "ydo30QsrMQnjjKOnRN8f"
+  ],
+  [
+   "rMXFghCSc2Q7MEL3LhNd",
+   "AvKQq1fUQMDKjKTjo0ZP"
+  ],
+  [
+   "16yOKdtBQ4csrvhgBJly",
+   "mRlqEpTXu9vRJdyXzUyI"
+  ],
+  [
+   "D52uH1F7XayZiXuPnwmv",
+   "LMZIo7Ulsp9cVNfOcGM3"
+  ],
+  [
+   "K9RW7HghjbJfUOzyRv3V",
+   "cRGnntx1WihclNGJa04r"
+  ],
+  [
+   "5NOfoqchVNBF1h2OW0lC",
+   "BWCloHFAxMzlV1VejDFy"
+  ],
+  [
+   "2qiGnLYDUT0EBCvsCQfa",
+   "cerQoTFdDdIFJkShOU2A"
+  ],
+  [
+   "XDFpgrYctrv668Z7QGm3",
+   "uTcducOGaRdBtyr66b3n"
+  ],
+  [
+   "Fm2WPlxi9jr6r6oMYaES",
+   "55jyiY3IZy0wdTqnigoF"
+  ]
+ ]
 }

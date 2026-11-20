@@ -24,6 +24,7 @@ import { Voice } from '../audio/voice';
 import { loadSettings, saveSettings, TRAFFIC_COUNTS, type Settings } from './settings';
 import { EXAM, FREE, LESSONS, START_STREETS, planExam, planRoute, poseOn, quietStreet, startOnStreet, type Lesson, type LessonCtx, type StartPose } from './lessons';
 import { findRoute, RouteFollower, type Route } from '../map/route';
+import { Autopilot } from './autopilot';
 import { drawQuiz } from './quiz';
 import { clamp, hash32 } from '../core/math';
 
@@ -74,6 +75,11 @@ export class Game implements MenuHost {
   private hudTimer = 0;
   private audioReady = false;
   private lastInstruction = '';
+  private lastInstructionKey: string | null = null;
+  /** démonstration : le moniteur conduit à la place de l'élève */
+  private demo: Autopilot | null = null;
+  private demoSteer = 0;
+  private demoIndOff = 0;
   private recalcCooldown = 0;
   private postGrid = new Map<number, { x: number; z: number; r: number }[]>();
   private startPose: StartPose | null = null;
@@ -177,6 +183,7 @@ export class Game implements MenuHost {
     const exam = () => this.lesson.id === 'examen';
     this.rules.onFault = (f) => {
       if (f.inf.id === 'controle' && !this.settings.strict) { this.rules.faults.pop(); return; }
+      if (this.demo) { this.rules.faults.pop(); return; } // le moniteur conduit : rien n'est retenu contre l'élève
       const s = this.session;
       s.faults.push(f);
       s.points = Math.max(0, s.points - f.inf.points);
@@ -300,7 +307,7 @@ export class Game implements MenuHost {
     if (lesson.ready) P.handbrake = true;
 
     // itinéraire
-    this.route = null; this.follower = null;
+    this.route = null; this.follower = null; this.demo = null; this.hud.setDemo(false);
     if (lesson.theme === 'examen') this.route = planExam(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, seed);
     else if (lesson.steps.some((st) => st.text === 'Suivez les indications du moniteur jusqu’à l’arrivée')) this.route = planRoute(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, lesson.theme, seed);
     if (this.route) this.follower = new RouteFollower(this.route);
@@ -427,8 +434,68 @@ export class Game implements MenuHost {
     return { rows, total: Math.round(total * 2) / 2, eliminated };
   }
 
+  // ───────────────────────── démonstration du moniteur ─────────────────────────
+  /** Le moniteur prend (ou rend) le volant : il conduit en respectant le Code, sur l'itinéraire en cours. */
+  toggleDemo() {
+    if (this.state !== 'drive') return;
+    if (this.demo) { this.endDemo('Je vous rends le volant. À vous !'); return; }
+    if (this.lesson.id === 'examen') { this.hud.coach('Pas de démonstration pendant l’examen.', '', false, 3); return; }
+    const P = this.player, c = P.car, sit = this.rules.situation;
+    if (!sit.edge || sit.junction || sit.wrongWay) { this.hud.coach('Replacez-vous sur une voie, hors carrefour, pour lancer la démonstration.', '', false, 4); return; }
+    // itinéraire : la suite de celui de la leçon, sinon une boucle à partir d'ici
+    let route: Route | null = null;
+    if (this.route && this.follower && !this.follower.done && this.route.steps[this.follower.step]?.edge === sit.edge && this.route.steps[this.follower.step].dir === sit.dir) {
+      route = { ...this.route, steps: this.route.steps.slice(this.follower.step) };
+    } else {
+      const sEdge = sit.dir > 0 ? sit.sFront : sit.edge.length - sit.sFront;
+      route = planRoute(this.net, { edge: sit.edge, dir: sit.dir }, sEdge, 'circulation', Math.floor(this.session.time * 7) + 1);
+    }
+    if (!route) { this.hud.coach('Impossible de préparer une démonstration ici.', '', false, 3); return; }
+    const ap = new Autopilot(this.net, this.traffic, route);
+    if (!ap.segs.length) { this.hud.coach('Impossible de préparer une démonstration ici.', '', false, 3); return; }
+    // le moniteur s'installe : ceinture, moteur, boîte automatique
+    if (!c.engineRunning) { c.mode = 'auto'; c.selector = 'P'; c.startEngine({ steer: 0, throttle: 0, brake: 1, clutch: 1, handbrake: 1 }); c.engineRunning = true; }
+    c.mode = 'auto'; c.selector = 'D';
+    P.seatbelt = true; P.handbrake = false; P.hazards = false;
+    this.demo = ap; this.demoSteer = this.controls.state.steer; this.demoIndOff = 0;
+    this.hud.setDemo(true);
+    this.say('Regardez bien : je prends le volant et je vous montre.', null, 'Démonstration — touche O ou coup de frein pour reprendre la main');
+  }
+
+  private endDemo(text: string) {
+    if (!this.demo) return;
+    this.demo = null;
+    this.hud.setDemo(false);
+    const c = this.player.car;
+    // on rend la voiture dans la configuration choisie par l'élève
+    c.mode = this.settings.transmission;
+    if (c.mode !== 'auto') { const g = clamp(c.gear, 0, 6); c.gear = g; c.lever = g; }
+    this.player.setIndicator(0);
+    this.say(text);
+  }
+
+  /** Remplace les commandes de l'élève par celles du moniteur pendant la démonstration. */
+  private demoInput(dt: number, input: InputState): InputState {
+    const ap = this.demo;
+    if (!ap) return input;
+    const P = this.player;
+    // l'élève reprend la main d'un coup de frein
+    if (input.brake > 0.35) { this.endDemo('Vous reprenez la main.'); return input; }
+    const cmd = ap.update(dt, P.car);
+    this.demoSteer += clamp(cmd.steer - this.demoSteer, -2.2 * dt, 2.2 * dt);
+    if (cmd.indicator !== 0 && cmd.indicator !== P.indicator) P.setIndicator(cmd.indicator);
+    this.demoIndOff = cmd.indicator === 0 && P.indicator !== 0 ? this.demoIndOff + dt : 0;
+    if (this.demoIndOff > 2.5) P.setIndicator(0);
+    if (cmd.done) {
+      P.handbrake = true;
+      this.endDemo('Démonstration terminée. À vous de jouer !');
+      return { ...input, throttle: 0, brake: 0.6, pressed: new Set(), held: new Set() };
+    }
+    return { ...input, steer: this.demoSteer, throttle: cmd.throttle, brake: cmd.brake, clutch: 0, pressed: new Set(), held: new Set(), hGear: null, steerRate: 0 };
+  }
+
   private say(text: string, key: string | null = null, sub = '') {
-    this.lastInstruction = text;
+    this.lastInstruction = text; this.lastInstructionKey = key;
     this.hud.coach(text, sub, false, 7);
     this.voice.say(text, key);
   }
@@ -532,7 +599,9 @@ export class Game implements MenuHost {
     if (input.pressed.has('pause')) { this.pause(); return; }
     if (input.pressed.has('camera')) this.hud.coach(VIEW_LABELS[this.view.cycle()], '', false, 1.5);
     if (input.pressed.has('reset')) this.replaceCar();
-    if (input.pressed.has('repeat')) { this.hud.coach(this.lastInstruction, '', false, 6); this.voice.say(this.lastInstruction, null, true); }
+    if (input.pressed.has('repeat')) { this.hud.coach(this.lastInstruction, '', false, 6); this.voice.say(this.lastInstruction, this.lastInstructionKey, true); }
+    if (input.pressed.has('demo')) this.toggleDemo();
+    input = this.demoInput(dt, input);
 
     P.update(dt, input);
     s.time += dt;
@@ -555,10 +624,12 @@ export class Game implements MenuHost {
 
     // retour de force
     const frontLoad = (c.fz[0] + c.fz[1]) / (c.spec.mass * 9.81 * 0.605);
-    this.ffb.setForce(this.ffbModel.compute(dt, {
+    const ffbForce = this.ffbModel.compute(dt, {
       steerTorque: c.steerTorque, steer: input.steer, steerRate: input.steerRate, speed: c.speed, abs: c.absActive,
       engineOn: c.engineRunning, rpm: c.rpm, damping: this.ffb.settings.damping, frontLoad,
-    }));
+    });
+    // pendant la démonstration, le volant de l'élève reste libre
+    this.ffb.setForce(this.demo ? 0 : ffbForce);
 
     // son
     if (this.audioReady) {
@@ -577,6 +648,7 @@ export class Game implements MenuHost {
       }
     }
 
+    this.view.avoid = this.view.mode === 'poursuite' ? this.traffic.vehicles : null;
     this.view.update(dt, P, input, sit.limit);
 
     // affichage

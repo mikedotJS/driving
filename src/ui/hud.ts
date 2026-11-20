@@ -156,6 +156,7 @@ export class Hud {
     if (t !== this.last.street) { this.streetEl.textContent = t; this.streetEl.style.display = t ? '' : 'none'; this.last.street = t; }
   }
   setDevice(text: string) { this.deviceEl.textContent = text; }
+  setDemo(on: boolean) { $('#demo').classList.toggle('on', on); }
   setFps(text: string) { this.fpsEl.textContent = text; }
 
   /** Mini-carte orientée dans le sens de la marche. */

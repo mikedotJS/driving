@@ -21,6 +21,8 @@ export interface MenuHost {
   restart(): void;
   applySettings(): void;
   audioTest?(): void;
+  /** le moniteur prend le volant pour montrer */
+  toggleDemo?(): void;
 }
 
 export interface Bilan {
@@ -237,7 +239,7 @@ export class Menus {
     const c = this.host.controls;
     const p = c.profile;
     if (!c.pad || !p) { done(); return; }
-    const actions: Action[] = ['shiftUp', 'shiftDown', 'indicatorLeft', 'indicatorRight', 'hazards', 'horn', 'start', 'handbrake', 'seatbelt', 'lights', 'lookLeft', 'lookRight', 'lookBack', 'camera', 'repeat', 'pause', 'gear1', 'gear2', 'gear3', 'gear4', 'gear5', 'gear6', 'gearR'];
+    const actions: Action[] = ['shiftUp', 'shiftDown', 'indicatorLeft', 'indicatorRight', 'hazards', 'horn', 'start', 'handbrake', 'seatbelt', 'lights', 'lookLeft', 'lookRight', 'lookBack', 'camera', 'repeat', 'demo', 'pause', 'gear1', 'gear2', 'gear3', 'gear4', 'gear5', 'gear6', 'gearR'];
     let waiting: Action | null = null;
     let base: boolean[] = [];
     const rows = new Map<Action, HTMLElement>();
@@ -286,6 +288,7 @@ export class Menus {
         row('Regarder à gauche · derrière · à droite', k('W'), ' ', k('X'), ' ', k('V')),
         row('Changer de vue', k('C')),
         row('Répéter la consigne', k('T')),
+        row('Démonstration : le moniteur conduit', k('O')),
         row('Replacer la voiture sur la chaussée', k('R')),
         row('Pause', k('Échap'), ' ou ', k('P')),
       ),
@@ -302,6 +305,7 @@ export class Menus {
       h('div', { class: 'grid' },
         h('button', { class: 'card', onclick: () => this.host.resume() }, h('h3', null, 'Reprendre')),
         h('button', { class: 'card', onclick: () => this.host.restart() }, h('h3', null, 'Recommencer')),
+        ...(lesson.id !== 'examen' && this.host.toggleDemo ? [h('button', { class: 'card', onclick: () => { this.host.resume(); this.host.toggleDemo!(); } }, h('h3', null, 'Démonstration du moniteur'), h('p', null, 'Le moniteur prend le volant et vous montre. Un coup de frein pour reprendre la main.'))] : []),
         h('button', { class: 'card', onclick: () => this.settings('volant', () => this.pause(lesson)) }, h('h3', null, 'Réglages')),
         h('button', { class: 'card', onclick: () => this.help(() => this.pause(lesson)) }, h('h3', null, 'Commandes')),
         h('button', { class: 'card', onclick: () => this.host.quit() }, h('h3', null, 'Terminer la séance'), h('p', null, 'Affiche le bilan de votre conduite.')),

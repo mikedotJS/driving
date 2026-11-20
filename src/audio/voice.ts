@@ -15,12 +15,19 @@ export class Voice {
   onSpeak?: (active: boolean) => void;
   last = '';
 
-  async init(ctx: AudioContext | null, bus: AudioNode | null) {
-    this.ctx = ctx; this.bus = bus;
+  /** liste des répliques enregistrées, chargée dès l'ouverture de la page (sans attendre le son) */
+  private manifestReady: Promise<void> = this.loadManifest();
+
+  private async loadManifest() {
     try {
       const r = await fetch('audio/voix/manifest.json');
       if (r.ok) for (const k of (await r.json()) as string[]) this.manifest.add(k);
     } catch { /* pas de voix enregistrées */ }
+  }
+
+  async init(ctx: AudioContext | null, bus: AudioNode | null) {
+    this.ctx = ctx; this.bus = bus;
+    await this.manifestReady;
     const pick = () => {
       const voices = speechSynthesis?.getVoices?.() ?? [];
       this.frVoice = voices.find((v) => /fr[-_]FR/i.test(v.lang) && /natural|google|premium|enhanced|thomas|amélie|amelie/i.test(v.name)) ?? voices.find((v) => /^fr/i.test(v.lang)) ?? null;
@@ -54,6 +61,7 @@ export class Voice {
     this.speaking = true;
     this.onSpeak?.(true);
     const done = () => { void this.next(); };
+    await this.manifestReady;
     if (item.key && this.manifest.has(item.key) && this.ctx && this.bus) {
       try {
         let buf = this.cache.get(item.key);

@@ -44,6 +44,9 @@ export class PlayerView {
   private lookYaw = 0;
   private lookPitch = 0;
   private chaseYaw = 0;
+  private chaseLift = 0;
+  /** véhicules proches à ne pas traverser avec la caméra extérieure */
+  avoid: { x: number; z: number }[] | null = null;
   private headOffset = new THREE.Vector3();
   private readonly cgShift: number;
   private tmp = new THREE.Vector3();
@@ -190,8 +193,14 @@ export class PlayerView {
       cam.layers.enable(LAYER_EXTERIOR);
       this.root.updateWorldMatrix(true, true);
       this.chaseYaw = damp(this.chaseYaw, -c.heading + this.lookYaw * 1.2, 5, dt);
-      const dist = 6.4, h = 2.3;
-      cam.position.set(this.root.position.x + Math.sin(this.chaseYaw) * dist, h, this.root.position.z + Math.cos(this.chaseYaw) * dist);
+      const dist = 6.4;
+      const cx = this.root.position.x + Math.sin(this.chaseYaw) * dist, cz = this.root.position.z + Math.cos(this.chaseYaw) * dist;
+      // un véhicule sous la caméra (celui qui nous suit, une camionnette garée) : on prend de la hauteur
+      let near = Infinity;
+      if (this.avoid) for (const o of this.avoid) near = Math.min(near, Math.hypot(o.x - cx, o.z - cz));
+      this.chaseLift = damp(this.chaseLift, clamp((3.4 - near) / 2.2, 0, 1), 4, dt);
+      const h = 2.3 + this.chaseLift * 1.7;
+      cam.position.set(cx, h, cz);
       cam.lookAt(this.root.position.x, 1.1, this.root.position.z);
     }
     cam.updateMatrixWorld();

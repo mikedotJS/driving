@@ -9,7 +9,7 @@ import { approach, clamp, clamp01 } from '../core/math';
 export type Action =
   | 'shiftUp' | 'shiftDown' | 'indicatorLeft' | 'indicatorRight' | 'hazards' | 'horn' | 'start'
   | 'handbrake' | 'seatbelt' | 'lights' | 'lookLeft' | 'lookRight' | 'lookBack' | 'camera' | 'reset' | 'pause'
-  | 'gear1' | 'gear2' | 'gear3' | 'gear4' | 'gear5' | 'gear6' | 'gearR' | 'gearN' | 'repeat';
+  | 'gear1' | 'gear2' | 'gear3' | 'gear4' | 'gear5' | 'gear6' | 'gearR' | 'gearN' | 'repeat' | 'demo';
 
 export const ACTION_LABELS: Record<Action, string> = {
   shiftUp: 'Rapport supérieur', shiftDown: 'Rapport inférieur',
@@ -19,7 +19,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   lookLeft: 'Regarder à gauche (angle mort)', lookRight: 'Regarder à droite (angle mort)', lookBack: 'Regarder derrière',
   camera: 'Changer de vue', reset: 'Replacer la voiture', pause: 'Pause / menu',
   gear1: '1re', gear2: '2e', gear3: '3e', gear4: '4e', gear5: '5e', gear6: '6e', gearR: 'Marche arrière', gearN: 'Point mort',
-  repeat: 'Répéter la consigne',
+  repeat: 'Répéter la consigne', demo: 'Démonstration : le moniteur conduit',
 };
 
 export interface AxisMap { index: number; rest: number; full: number }
@@ -60,7 +60,7 @@ const KEYS: Record<string, Action> = {
   KeyC: 'camera', KeyR: 'reset', Escape: 'pause', KeyP: 'pause',
   Digit1: 'gear1', Digit2: 'gear2', Digit3: 'gear3', Digit4: 'gear4', Digit5: 'gear5', Digit6: 'gear6', Digit0: 'gearN', Backquote: 'gearR', Digit9: 'gearR',
   KeyZ: 'lookLeft', KeyX: 'lookBack', KeyV: 'lookRight', // AZERTY : W / X / V
-  KeyT: 'repeat',
+  KeyT: 'repeat', KeyO: 'demo',
 };
 // touches « maintenues »
 const HOLD_KEYS: Record<string, 'left' | 'right' | 'throttle' | 'brake' | 'clutch'> = {
