@@ -611,7 +611,8 @@ export class Autopilot {
     for (const b of tr.cyclists) if (!b.hit) test(b.x, b.z, 1.25);
     what = 'piéton sur la chaussée';
     // piétons : large marge pour ceux qui traversent ; ceux qui attendent sur le trottoir ne comptent que s'ils sont vraiment sur la trajectoire
-    for (const p of tr.pedestrians) if (!p.hit) test(p.x, p.z, p.state === 'cross' ? 0.9 : 0.02);
+    // (un piéton qui s'éloigne ou flâne peut encore longer la chaussée : marge intermédiaire)
+    for (const p of tr.pedestrians) if (!p.hit) test(p.x, p.z, p.state === 'cross' ? 0.9 : p.state === 'leave' || p.state === 'stroll' ? 0.4 : 0.02);
     return best;
   }
 }
