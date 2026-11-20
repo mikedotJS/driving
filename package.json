@@ -1,0 +1,30 @@
+{
+  "name": "conduite-montreuil",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Simulateur d'apprentissage de la conduite (Code de la route français) dans les rues de Montreuil et Paris, compatible volant Logitech G923.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "map:fetch": "bash tools/fetch-osm.sh",
+    "map:build": "node tools/build-map.mjs"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/earcut": "^3.0.0",
+    "@types/three": "^0.187.0",
+    "@types/w3c-web-hid": "^1.0.7",
+    "clipper-lib": "^6.4.2",
+    "earcut": "^3.2.4",
+    "fast-xml-parser": "^5.12.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}
