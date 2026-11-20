@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "map:fetch": "bash tools/fetch-osm.sh",
-    "map:build": "node tools/build-map.mjs"
+    "map:build": "node tools/build-map.mjs",
+    "test:endurance": "GRAINES=8 vitest run --config tools/vitest.config.ts tools/essais/balayage.test.ts"
   },
   "dependencies": {
     "three": "^0.187.0"

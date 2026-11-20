@@ -92,8 +92,9 @@ Les autres usagers suivent les mêmes règles que vous : feux, stops, priorité 
 l'anneau dans les giratoires, arrêt devant les piétons. Un **conducteur automatique** (celui de la
 démonstration) sert aussi de banc d'essai : `npm test` lui fait parcourir cinq leçons dans la
 circulation et exige qu'il arrive au bout sans aucune faute grave ni accrochage — c'est ce qui limite
-les fausses fautes signalées à un élève qui conduit bien. Sur un balayage plus large de 48 trajets,
-tous arrivent au bout, 47 sont sans faute grave ni accrochage, et aucun ne touche une bordure. Les mesures (physique comparée à une
+les fausses fautes signalées à un élève qui conduit bien. Le balayage plus large (`npm run test:endurance`,
+48 trajets) est entièrement propre : aucune faute grave, aucun accrochage, aucune bordure touchée —
+y compris sur 48 autres trajets tirés avec des graines jamais utilisées pendant la mise au point. Les mesures (physique comparée à une
 citadine réelle, volant émulé, charge de rendu, captures) sont dans [`docs/realisme.md`](docs/realisme.md).
 
 ## Le décor

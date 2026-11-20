@@ -53,6 +53,8 @@ export class Vehicle {
   /** temps passé arrêté derrière une carrosserie détectée par le filet géométrique */
   netWait = 0;
   crashed = 0;
+  /** durée d'immobilisation continue (s) */
+  still = 0;
   /** temps d'arrêt derrière un joueur lui-même immobile */
   playerWait = 0;
   /** écart latéral pris pour contourner le joueur arrêté qui empiète un peu sur la trajectoire (m, + à droite) */
@@ -153,7 +155,13 @@ export class Traffic {
   update(dt: number, player: PlayerInfo | null) {
     this.time += dt;
     this.index();
-    for (const v of this.vehicles) this.stepVehicle(v, dt, player);
+    for (const v of this.vehicles) {
+      this.stepVehicle(v, dt, player);
+      // embouteillage qui ne se résorbe pas (place saturée) : loin du joueur, les véhicules immobilisés
+      // depuis plus d'une minute et quart quittent la simulation, ce qui redonne de l'air au carrefour
+      v.still = v.v < 0.2 ? v.still + dt : 0;
+      if (v.still > 75 && player && Math.hypot(v.x - player.x, v.z - player.z) > 45) v.alive = false;
+    }
     for (const p of this.pedestrians) this.stepPedestrian(p, dt, player);
     for (const c of this.cyclists) this.stepCyclist(c, dt, player);
     this.cyclists = this.cyclists.filter((c) => c.alive);

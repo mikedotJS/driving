@@ -62,14 +62,20 @@ circulation, avec la vraie physique ; le moniteur ne doit rien lui reprocher de 
 | Essai | Résultat |
 |---|---|
 | `npm test` : 5 leçons (feux, priorité, tournants, giratoire, grands axes) | 5 sur 5 sans faute grave ni accrochage |
-| `tools/essais/balayage.test.ts`, 48 trajets (6 thèmes × 8 tirages) | 48 terminés ; 47 sans faute grave ni accrochage ; aucun contact avec une bordure ; reste 1 accrochage à 18 km/h dans la Croix de Chavaux |
-| Circulation seule, 45 véhicules autour de la Croix de Chavaux pendant 6 min | arrêt le plus long 52 s, vitesse moyenne 17 km/h ; 3 chevauchements instantanés entre voitures. Sur cinq autres tirages : 2 à 10 chevauchements pour trois d'entre eux, mais un embouteillage de plus d'une minute pour les deux autres |
+| `npm run test:endurance` : 48 trajets (6 thèmes × 8 tirages) | 48 terminés, 48 sans faute grave ni accrochage, aucun contact avec une bordure ; même résultat sur 48 autres trajets tirés avec des graines jamais utilisées pendant la mise au point (`BASE=500`) |
+| Circulation seule, 45 véhicules autour de la Croix de Chavaux pendant 6 min, 8 tirages | aucun véhicule immobilisé plus de 40 s en fin d'essai ; 1 à 35 chevauchements instantanés entre voitures selon le tirage (2 sur le tirage de référence, arrêt le plus long 52 s) |
 
 Ces essais ont fait corriger plusieurs **fausses fautes** : refus de priorité signalé à une voiture
 arrêtée à sa ligne de stop, sens interdit dans une rue à sens unique tracée à l'envers, clignotant
 exigé avant un carrefour impossible à anticiper, ligne de stop placée 11 m trop tôt, ligne de feu
 décalée de plusieurs mètres dans les rues courbes, autobus qui balayait la voie voisine en tournant.
 Les itinéraires de leçon ne sont retenus que si chaque virage est praticable sans toucher une bordure.
+
+Garde-fous contre les embouteillages : on n'entre pas dans un carrefour complexe déjà encombré ; entre
+usagers à l'arrêt qui se cèdent mutuellement le passage, celui qui attend depuis le plus longtemps
+passe ; une voiture qui barre la route du joueur à l'arrêt s'écarte ou recule ; en dernier recours
+(30 s de blocage complet près du joueur, ou 75 s d'immobilisation à plus de 45 m de lui), le véhicule
+est retiré de la circulation.
 
 ## 5. Charge de rendu
 
