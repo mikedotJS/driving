@@ -30,8 +30,8 @@ await Promise.all([mats.load(renderer), sky.load()]);
 const city = new City(net, mats);
 scene.add(city.group);
 const ground = new Ground(map);
-const props = new Props(net, mats, ground);
-city.decorators.push((k, g) => props.populateChunk(k, g));
+const props = new Props(net, mats, ground, city.enseignes);
+city.decorators.push((k, g, textes) => props.populateChunk(k, g, textes));
 scene.add(props.group);
 props.update(num('time', 0));
 

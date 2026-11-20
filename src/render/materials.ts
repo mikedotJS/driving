@@ -136,8 +136,11 @@ export class MaterialLib {
     this.paintYellow.color.set(0xf2c230);
     this.plaza = new THREE.MeshStandardMaterial({ map: sett.map, normalMap: sett.normalMap, roughnessMap: sett.roughnessMap, color: new THREE.Color(1.25, 1.22, 1.15), roughness: 1, metalness: 0 });
     this.dirt = new THREE.MeshStandardMaterial({ color: 0x8d7b62, roughness: 1, metalness: 0 });
-    this.hedge = new THREE.MeshStandardMaterial({ color: 0x35512a, roughness: 1, metalness: 0 });
-    this.fence = new THREE.MeshStandardMaterial({ color: 0x2c3a31, roughness: 0.6, metalness: 0.5 });
+    // vert de troène au soleil : plus sombre, les haies à l'ombre viraient au noir
+    this.hedge = new THREE.MeshStandardMaterial({ color: 0x55783f, roughness: 1, metalness: 0 });
+    // Grillages et clôtures à barreaux : on voit au travers. En panneau plein vert sombre, ils dressaient
+    // des blocs noirs le long des trottoirs et devant les places (Croix de Chavaux, mairie).
+    this.fence = new THREE.MeshStandardMaterial({ color: 0x3f4d45, roughness: 0.6, metalness: 0.5, transparent: true, opacity: 0.45, depthWrite: false });
     this.water = new THREE.MeshStandardMaterial({ color: 0x3a5d6e, roughness: 0.08, metalness: 0.2 });
     this.facade = this.makeFacadeMaterial();
   }

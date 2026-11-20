@@ -3,7 +3,9 @@
 // (alpha = 0 → vitre réfléchissante).
 //
 // Styles inspirés du bâti de Paris 20e et de Montreuil : haussmannien, faubourg enduit,
-// brique des HBM, pavillon de banlieue, barre moderne, contemporain, industriel, équipement public.
+// brique des HBM, pavillon de banlieue, barre moderne, contemporain, industriel, équipement public,
+// meulière à décor de brique des pavillons, mur-rideau des tours de bureaux, pierre claire à hautes
+// baies des édifices publics, baies en arc et portail des églises.
 
 import * as THREE from 'three';
 import { Rng } from '../core/math';
@@ -12,11 +14,18 @@ export const TILE = 512;
 export const BAY_W = 3.2;   // m
 export const FLOOR_H = 3.0; // m
 
-export type FacadeStyle = 'haussmann' | 'faubourg' | 'brique' | 'pavillon' | 'moderne' | 'contemporain' | 'industriel' | 'public';
-export const STYLES: FacadeStyle[] = ['haussmann', 'faubourg', 'brique', 'pavillon', 'moderne', 'contemporain', 'industriel', 'public'];
+export type FacadeStyle = 'haussmann' | 'faubourg' | 'brique' | 'pavillon' | 'moderne' | 'contemporain' | 'industriel' | 'public' | 'meuliere' | 'verre' | 'civique' | 'culte';
+export const STYLES: FacadeStyle[] = ['haussmann', 'faubourg', 'brique', 'pavillon', 'moderne', 'contemporain', 'industriel', 'public', 'meuliere', 'verre', 'civique', 'culte'];
 /** rôles des tuiles d'un style */
 export type TileRole = 'upperA' | 'upperB' | 'ground' | 'door' | 'plain';
 const ROLES: TileRole[] = ['upperA', 'upperB', 'ground', 'door', 'plain'];
+// Chaque couche de la texture tableau pèse 1,4 Mo en mémoire graphique : les styles réservés à une
+// poignée d'édifices ne peignent que les tuiles qui leur sont propres et empruntent les autres.
+const EMPRUNTS: Partial<Record<FacadeStyle, Partial<Record<TileRole, [FacadeStyle, TileRole]>>>> = {
+  civique: { upperB: ['civique', 'upperA'], ground: ['civique', 'upperA'] },
+  // une église n'a pas de fenêtres basses, et sa pierre nue est celle des édifices publics
+  culte: { upperB: ['culte', 'upperA'], ground: ['civique', 'plain'], plain: ['civique', 'plain'] },
+};
 export const SHOP_TILES = 6;
 
 export interface FacadeSet {
@@ -169,7 +178,79 @@ function finish(p: ReturnType<typeof makePair>): ImageData {
   return cd;
 }
 
+/** appareil de brique : rangs à joints croisés, ou briques debout (linteaux, bandeaux) */
+function bricks(p: Pair, x: number, y: number, w: number, h: number, debout = false) {
+  const { c, rng } = p;
+  R(c, x, y, w, h, '#cbb9a0'); // mortier
+  const bw = debout ? 0.065 : 0.22, bh = debout ? h : 0.065, j = 0.012;
+  let row = 0;
+  for (let by = y; by < y + h - 0.01; by += bh + j, row++) {
+    for (let bx = x - (row % 2 && !debout ? bw / 2 : 0); bx < x + w; bx += bw + j) {
+      const x0 = Math.max(x, bx), x1 = Math.min(x + w, bx + bw);
+      if (x1 - x0 < 0.01) continue;
+      R(c, x0, by, x1 - x0, Math.min(bh, y + h - by), rng.pick(['#a5492f', '#b0553a', '#9a4129', '#b8603f', '#8f3d2a']));
+    }
+  }
+}
+/**
+ * Blocage de meulière : petits moellons bruts (10 à 25 cm) brun-ocre, de toutes les tailles, noyés
+ * dans un mortier sombre. Surtout pas de grands blocs réguliers à joints clairs, qui font un dallage.
+ */
+function rubble(p: Pair) {
+  const { c, rng } = p;
+  c.fillStyle = '#6f6253'; c.fillRect(0, 0, TILE, TILE);
+  // bruns et ocres éteints ; une pierre sur dix tire sur la rouille
+  const tones = ['#a08a6a', '#94805f', '#ab9474', '#8a765a', '#b39d7c', '#9c8466', '#877258', '#a8906c', '#bca88a', '#917a5c'];
+  // Assises de hauteur inégale dont la somme fait exactement la tuile, pierres de longueur variable
+  // dont la somme fait exactement la largeur : la tuile se raccorde à elle-même dans les deux sens.
+  const coupes = (lo: number, hi: number) => {
+    const l = [0];
+    while (l[l.length - 1] < TILE - hi) l.push(l[l.length - 1] + lo + rng.next() * (hi - lo));
+    l.push(TILE);
+    return l;
+  };
+  const ys = coupes(17, 34);
+  for (let j = 0; j + 1 < ys.length; j++) {
+    const xs = coupes(16, 42);
+    for (let i = 0; i + 1 < xs.length; i++) {
+      const x0 = xs[i] + 1, x1 = xs[i + 1] - 1, y0 = ys[j] + 1, y1 = ys[j + 1] - 1;
+      const w = x1 - x0, h = y1 - y0;
+      // contour cabossé : chaque angle est rogné différemment, les côtés ne sont pas droits
+      const jx = () => rng.next() * w * 0.22, jy = () => rng.next() * h * 0.28;
+      c.fillStyle = rng.next() < 0.1 ? rng.pick(['#9a6a44', '#8f623f', '#a67850']) : rng.pick(tones);
+      c.beginPath();
+      c.moveTo(x0 + jx(), y0 + jy()); c.lineTo(x0 + w * (0.35 + rng.next() * 0.3), y0 + jy() * 0.4); c.lineTo(x1 - jx(), y0 + jy());
+      c.lineTo(x1 - jx() * 0.4, y0 + h * (0.35 + rng.next() * 0.3));
+      c.lineTo(x1 - jx(), y1 - jy()); c.lineTo(x0 + w * (0.35 + rng.next() * 0.3), y1 - jy() * 0.4); c.lineTo(x0 + jx(), y1 - jy());
+      c.lineTo(x0 + jx() * 0.4, y0 + h * (0.35 + rng.next() * 0.3));
+      c.closePath(); c.fill();
+      // cavités de la pierre : la meulière est une roche caverneuse
+      for (let k = 0; k < 4; k++) {
+        c.fillStyle = rng.next() < 0.65 ? 'rgba(50,35,20,0.25)' : 'rgba(255,240,210,0.16)';
+        c.fillRect(x0 + w * 0.2 + rng.next() * w * 0.5, y0 + h * 0.25 + rng.next() * h * 0.45, 2 + rng.next() * 4, 1.5 + rng.next() * 3);
+      }
+    }
+  }
+}
+/** pierre claire et béton bouchardé des édifices publics et des églises : assises à joints fins */
+function pierreClaire(p: Pair, im: WallImages) {
+  const { c } = p;
+  tileImage(p, im.concrete, '#e9e5da', 3.2, undefined, 0.22);
+  for (let y = 0; y < FLOOR_H; y += 0.5) R(c, 0, y, BAY_W, 0.01, 'rgba(90,80,62,0.16)');
+  for (let y = 0, k = 0; y < FLOOR_H; y += 0.5, k++) for (let x = k % 2 ? 0.8 : 0; x < BAY_W; x += 1.6) R(c, x, y, 0.008, 0.5, 'rgba(90,80,62,0.12)');
+}
+/** trace une baie en plein cintre (x, y = angle haut gauche du rectangle englobant) */
+function arc(ctx: Ctx, x: number, y: number, w: number, h: number) {
+  // demi-cercle à l'échelle de la tuile ; étirée sur la hauteur d'une nef, elle en fait un arc élancé
+  const ry = Math.min(h * 0.3 * PY, (w / 2) * PX);
+  ctx.beginPath();
+  ctx.moveTo(x * PX, (y + h) * PY); ctx.lineTo(x * PX, y * PY + ry);
+  ctx.ellipse((x + w / 2) * PX, y * PY + ry, (w / 2) * PX, ry, 0, Math.PI, 0);
+  ctx.lineTo((x + w) * PX, (y + h) * PY); ctx.closePath();
+}
+
 const GLASS_DAY = ['#5d7186', '#2c3a47'];
+const GLASS_TOUR = ['#7f9cab', '#3d5565'];
 const GLASS_DARK = ['#48596a', '#1d262f'];
 
 export interface WallImages { plaster: HTMLImageElement | null; brick: HTMLImageElement | null; concrete: HTMLImageElement | null; stone: HTMLImageElement | null; beige: HTMLImageElement | null }
@@ -248,7 +329,9 @@ function drawStyle(style: FacadeStyle, role: TileRole, im: WallImages): ImageDat
       break;
     }
     case 'brique': {
-      tileImage(p, im.brick, '#a4583c', 1.6, '#f0b79a');
+      // La photo de brique est brun sombre : posée telle quelle, la rue ressemblait à une ville
+      // anglaise sous la pluie. Elle ne fait plus que dessiner l'appareil sur un rouge orangé franc.
+      tileImage(p, im.brick, '#c56c4b', 1.6, undefined, 0.42);
       if (role === 'plain') break;
       R(c, 0, H - 0.2, W, 0.2, '#d9d2c2'); shade(c, 0, H - 0.2, W, 0.04, 0, 0.2);
       if (role === 'door') {
@@ -279,7 +362,9 @@ function drawStyle(style: FacadeStyle, role: TileRole, im: WallImages): ImageDat
       break;
     }
     case 'pavillon': {
-      tileImage(p, im.beige ?? im.plaster, '#e6dcc6', 3.2, '#f4ecd9');
+      // enduit clair : la photo (beige soutenu) ne sert qu'à nuancer, c'est la teinte du bâtiment
+      // (blanc cassé, crème, gris clair) qui donne la couleur
+      tileImage(p, im.beige ?? im.plaster, '#f1ece0', 3.2, undefined, 0.2);
       grain(p, 0.5);
       if (role === 'plain') { streaks(p, 0, 0, W, 1.0, 0.06); break; }
       if (role === 'door') {
@@ -301,7 +386,8 @@ function drawStyle(style: FacadeStyle, role: TileRole, im: WallImages): ImageDat
       }
       const wx = 1.0, ww = 1.2, wy = 0.75, wh = 1.35;
       windowAt(p, wx, wy, ww, wh, { frame: '#f4f4f0', glassTop: GLASS_DAY[0], glassBot: GLASS_DAY[1], mullions: 1, sill: '#cfc5ad', curtain: 0.85 });
-      shutters(p, wx, wy, ww, wh, role === 'upperA' ? '#7b8f6a' : '#8d5a44');
+      // volets battants blancs ou gris-bleu : ceux qu'on voit le plus sur les pavillons rénovés
+      shutters(p, wx, wy, ww, wh, role === 'upperA' ? '#e9e7e0' : '#8395a0');
       streaks(p, wx, wy + wh + 0.07, ww, 0.4, 0.08);
       break;
     }
@@ -369,7 +455,7 @@ function drawStyle(style: FacadeStyle, role: TileRole, im: WallImages): ImageDat
     }
     case 'public': {
       // écoles, gymnases, équipements : brique claire / béton, grandes fenêtres
-      tileImage(p, im.brick, '#b98a64', 1.6, '#ffe4c4');
+      tileImage(p, im.brick, '#cf9c74', 1.6, undefined, 0.42);
       R(c, 0, 0, W, 0.18, '#d8d2c4'); R(c, 0, H - 0.12, W, 0.12, '#d8d2c4');
       if (role === 'plain') break;
       if (role === 'door') {
@@ -382,8 +468,158 @@ function drawStyle(style: FacadeStyle, role: TileRole, im: WallImages): ImageDat
       windowAt(p, 0.35, 0.5, 2.5, role === 'ground' ? 1.7 : 1.9, { frame: '#f0efe9', glassTop: (role === 'ground' ? GLASS_DARK : GLASS_DAY)[0], glassBot: (role === 'ground' ? GLASS_DARK : GLASS_DAY)[1], mullions: 3, transom: 0.3, sill: '#d8d2c4', curtain: 0.3, recess: 0.06 });
       break;
     }
+    case 'civique': {
+      // mairies, écoles, équipements des années 1930 à 1970 : pierre ou béton clair, hautes baies
+      // verticales à petits carreaux prises entre des piles lisses
+      pierreClaire(p, im);
+      if (role === 'plain') { streaks(p, 0, 0, W, 1.2, 0.05); break; }
+      if (role === 'door') {
+        // entrée d'honneur : emmarchement, haute porte à deux vantaux sous une imposte vitrée
+        const dw = 2.0, dx = (W - dw) / 2;
+        R(c, dx - 0.22, 0.2, dw + 0.44, H - 0.2, '#d6d0c2'); shade(c, dx - 0.22, 0.2, dw + 0.44, 0.08, 0.3, 0);
+        R(c, dx, 0.38, dw, H - 0.38, '#2f3a40');
+        windowAt(p, dx + 0.1, 0.46, dw - 0.2, 0.7, { frame: '#2f3a40', glassTop: GLASS_DARK[0], glassBot: GLASS_DARK[1], mullions: 3, curtain: 0, recess: 0.02 });
+        for (const px of [dx + 0.12, dx + dw / 2 + 0.06]) {
+          R(c, px, 1.3, dw / 2 - 0.18, 0.7, 'rgba(255,255,255,0.06)'); R(c, px, 2.1, dw / 2 - 0.18, 0.6, 'rgba(0,0,0,0.18)');
+        }
+        R(c, dx + dw / 2 - 0.012, 1.24, 0.024, H - 1.24, 'rgba(0,0,0,0.5)');
+        R(c, dx + dw / 2 - 0.12, 1.95, 0.05, 0.3, '#c9a94e'); R(c, dx + dw / 2 + 0.07, 1.95, 0.05, 0.3, '#c9a94e');
+        shade(c, dx, 0.38, dw, 0.35, 0.4, 0);
+        R(c, dx - 0.5, H - 0.16, dw + 1.0, 0.16, '#c9c3b5'); R(c, dx - 0.3, H - 0.32, dw + 0.6, 0.16, '#d0cabc');
+        break;
+      }
+      // travée en léger retrait entre deux piles, allège pleine sous la baie
+      R(c, 0.55, 0, 2.1, H, 'rgba(110,100,82,0.10)');
+      shade(c, 0.55, 0, 0.05, H, 0.22, 0, false); shade(c, 2.6, 0, 0.05, H, 0, 0.14, false, '255,255,255');
+      windowAt(p, 0.75, 0.3, 1.7, 2.05, { frame: '#e4e2da', glassTop: GLASS_DAY[0], glassBot: GLASS_DAY[1], mullions: 2, sill: '#d2ccbe', curtain: 0.25, recess: 0.06, divided: true });
+      R(c, 0, H - 0.1, W, 0.1, '#d6d0c2'); shade(c, 0, H - 0.1, W, 0.03, 0, 0.18);
+      streaks(p, 0.75, 2.42, 1.7, 0.4, 0.06);
+      break;
+    }
+    case 'culte': {
+      // église : pierre nue, contrefort entre les travées, haute baie en plein cintre à vitrail
+      pierreClaire(p, im);
+      if (role === 'door') {
+        // portail : vantaux de chêne sous une archivolte
+        const dw = 2.2, dx = (W - dw) / 2;
+        c.fillStyle = '#cfc8b8'; arc(c, dx - 0.26, 0.22, dw + 0.52, H - 0.22); c.fill();
+        c.fillStyle = '#b9b2a2'; arc(c, dx - 0.12, 0.36, dw + 0.24, H - 0.36); c.fill();
+        c.fillStyle = '#4c3626'; arc(c, dx, 0.48, dw, H - 0.48); c.fill();
+        R(c, dx, 1.42, dw, 0.06, '#33241a');
+        for (let x = dx + 0.22; x < dx + dw - 0.1; x += 0.22) R(c, x, 1.5, 0.012, H - 1.5, 'rgba(0,0,0,0.3)');
+        R(c, dx + dw / 2 - 0.015, 1.48, 0.03, H - 1.48, 'rgba(0,0,0,0.55)');
+        for (const hy of [1.75, 2.6]) { R(c, dx + 0.06, hy, dw / 2 - 0.2, 0.05, '#1c1c1e'); R(c, dx + dw / 2 + 0.14, hy, dw / 2 - 0.2, 0.05, '#1c1c1e'); }
+        shade(c, dx, 0.48, dw, 0.6, 0.4, 0);
+        R(c, dx - 0.5, H - 0.14, dw + 1.0, 0.14, '#c4bdad');
+        break;
+      }
+      // contrefort à gauche de la travée : il se répète d'une travée à l'autre
+      R(c, 0, 0, 0.42, H, '#dcd6c8'); shade(c, 0.42, 0, 0.14, H, 0.28, 0, false); shade(c, 0, 0, 0.42, H, 0, 0.08, false);
+      {
+        const wx = 1.26, ww = 1.1, wy = 0.42, wh = 2.2;
+        c.fillStyle = '#d2cbbb'; arc(c, wx - 0.14, wy - 0.12, ww + 0.28, wh + 0.12); c.fill();
+        c.fillStyle = 'rgba(0,0,0,0.4)'; arc(c, wx - 0.04, wy - 0.03, ww + 0.08, wh + 0.03); c.fill();
+        const g = c.createLinearGradient(0, wy * PY, 0, (wy + wh) * PY);
+        g.addColorStop(0, '#4f6a86'); g.addColorStop(0.5, '#3c4f6e'); g.addColorStop(1, '#2a3346');
+        c.fillStyle = g; arc(c, wx, wy, ww, wh); c.fill();
+        p.m.fillStyle = '#555'; arc(p.m, wx, wy, ww, wh); p.m.fill();
+        // vitrail : résille de plomb et quelques verres de couleur
+        c.save(); arc(c, wx, wy, ww, wh); c.clip();
+        for (let k = 0; k < 26; k++) R(c, wx + Math.floor(rng.next() * 4) * (ww / 4), wy + Math.floor(rng.next() * 11) * 0.2, ww / 4, 0.2, `hsla(${rng.pick([0, 38, 205, 215, 130])},55%,50%,0.22)`);
+        for (let x = 1; x < 4; x++) R(c, wx + (ww * x) / 4 - 0.008, wy, 0.016, wh, 'rgba(15,15,18,0.8)');
+        for (let y = wy; y < wy + wh; y += 0.2) R(c, wx, y, ww, 0.012, 'rgba(15,15,18,0.7)');
+        c.restore();
+        R(c, wx - 0.16, wy + wh, ww + 0.32, 0.08, '#cfc8b8'); shade(c, wx - 0.16, wy + wh + 0.08, ww + 0.32, 0.08, 0.28, 0);
+        streaks(p, wx, wy + wh + 0.1, ww, 0.35, 0.07);
+      }
+      break;
+    }
+    case 'meuliere': {
+      // pavillons 1890-1930 : blocage de meulière, encadrements et bandeaux de brique
+      rubble(p);
+      if (role === 'plain') { streaks(p, 0, 0, W, 1.2, 0.06); break; }
+      if (upper) {
+        // bandeau d'étage : un rang de briques debout sous un filet de ciment
+        bricks(p, 0, H - 0.2, W, 0.14, true); R(c, 0, H - 0.06, W, 0.06, '#d8d0c0'); shade(c, 0, H - 0.2, W, 0.03, 0.25, 0);
+      } else {
+        // soubassement en ciment
+        R(c, 0, H - 0.55, W, 0.55, '#a59c8c'); shade(c, 0, H - 0.55, W, 0.05, 0.3, 0);
+      }
+      if (role === 'door') {
+        const dx = 1.1, dw = 1.0, dy = 0.75;
+        bricks(p, dx - 0.2, dy - 0.2, dw + 0.4, H - dy + 0.2);
+        bricks(p, dx - 0.2, dy - 0.2, dw + 0.4, 0.2, true);
+        R(c, dx, dy, dw, H - dy, rng.pick(['#2e4d3c', '#5b3a29', '#27455c', '#6a2420']));
+        windowAt(p, dx + 0.18, dy + 0.15, dw - 0.36, 0.75, { frame: '#1d1d1f', glassTop: GLASS_DARK[0], glassBot: GLASS_DARK[1], mullions: 1, curtain: 0, recess: 0.02 });
+        R(c, dx + 0.12, dy + 1.15, dw - 0.24, 0.9, 'rgba(0,0,0,0.16)');
+        // marquise de verre et de fer
+        c.fillStyle = 'rgba(205,225,230,0.55)';
+        c.beginPath(); c.moveTo((dx - 0.3) * PX, (dy - 0.12) * PY); c.lineTo((dx + dw + 0.3) * PX, (dy - 0.12) * PY); c.lineTo((dx + dw + 0.15) * PX, (dy - 0.42) * PY); c.lineTo((dx - 0.15) * PX, (dy - 0.42) * PY); c.fill();
+        R(c, dx - 0.3, dy - 0.14, dw + 0.6, 0.035, '#1d1d1f'); shade(c, dx - 0.2, dy - 0.1, dw + 0.4, 0.3, 0.35, 0);
+        break;
+      }
+      const two = role === 'upperB';
+      const wy = role === 'ground' ? 0.7 : 0.6, wh = role === 'ground' ? 1.45 : 1.7;
+      for (const wx of two ? [0.45, 1.85] : [1.0]) {
+        const ww = two ? 0.9 : 1.2;
+        // encadrement harpé : briques alternées de part et d'autre de la baie
+        for (let k = 0, hy = wy; hy < wy + wh; hy += 0.2, k++) {
+          const ew = k % 2 ? 0.22 : 0.11;
+          bricks(p, wx - ew, hy, ew, 0.2); bricks(p, wx + ww, hy, ew, 0.2);
+        }
+        bricks(p, wx - 0.22, wy - 0.22, ww + 0.44, 0.22, true);
+        R(c, wx + ww / 2 - 0.07, wy - 0.25, 0.14, 0.25, '#e4dccb'); // clef de linteau
+        windowAt(p, wx, wy, ww, wh, { frame: '#f4f2ec', glassTop: (role === 'ground' ? GLASS_DARK : GLASS_DAY)[0], glassBot: (role === 'ground' ? GLASS_DARK : GLASS_DAY)[1], mullions: 1, transom: two ? undefined : 0.22, sill: '#d8d0c0', curtain: 0.85 });
+        if (role !== 'ground') ironRail(p, wx - 0.02, wy + wh - 0.5, ww + 0.04, 0.48, '#1d1d1f', false);
+        else for (let i = 0; i < 8; i++) R(c, wx + 0.05 + (i * (ww - 0.1)) / 7, wy + 0.04, 0.018, wh - 0.08, '#2a2a2c');
+        streaks(p, wx - 0.1, wy + wh + 0.07, ww + 0.2, 0.45, 0.08);
+      }
+      break;
+    }
+    case 'verre': {
+      // tours de bureaux : mur-rideau, vitrage teinté sur toute la travée, allèges opaques, meneaux d'aluminium
+      const alu = '#c3c8cc';
+      if (role === 'plain') {
+        // pignon habillé de cassettes métalliques
+        R(c, 0, 0, W, H, '#b4babf');
+        for (let x = 0; x < W; x += 1.6) R(c, x, 0, 0.02, H, 'rgba(0,0,0,0.28)');
+        for (let y = 0; y < H; y += 1.0) { R(c, 0, y, W, 0.02, 'rgba(0,0,0,0.28)'); shade(c, 0, y + 0.02, W, 0.5, 0.06, 0); }
+        break;
+      }
+      if (role === 'ground' || role === 'door') {
+        R(c, 0, 0, W, H, '#33383d');
+        R(c, 0, 0, W, 0.35, '#8e9499'); shade(c, 0, 0.35, W, 0.12, 0.4, 0);
+        windowAt(p, 0.08, 0.45, W - 0.16, H - 0.7, { frame: '#33383d', glassTop: GLASS_DARK[0], glassBot: GLASS_DARK[1], mullions: role === 'door' ? 3 : 1, curtain: 0, recess: 0.03 });
+        if (role === 'door') { R(c, 1.3, 1.6, 0.04, 0.5, '#d0d0d0'); R(c, 1.86, 1.6, 0.04, 0.5, '#d0d0d0'); R(c, 0.6, 0.2, 2.0, 0.14, '#d7dadc'); }
+        R(c, 0, H - 0.25, W, 0.25, '#55595c');
+        break;
+      }
+      const n = role === 'upperA' ? 4 : 5, sp = role === 'upperA' ? 0.95 : 0.7;
+      // vitrage : vertical clair en haut (reflet du ciel), plus sombre vers l'allège
+      const g = c.createLinearGradient(0, 0, 0, (H - sp) * PY);
+      g.addColorStop(0, GLASS_TOUR[0]); g.addColorStop(1, GLASS_TOUR[1]);
+      c.fillStyle = g; c.fillRect(0, 0, TILE, (H - sp) * PY);
+      p.m.fillStyle = '#000'; p.m.fillRect(0, 0, TILE, (H - sp) * PY);
+      // allège : verre émaillé opaque, un peu brillant
+      R(c, 0, H - sp, W, sp, role === 'upperA' ? '#3f5560' : '#4a5a52');
+      p.m.fillStyle = '#9a9a9a'; p.m.fillRect(0, (H - sp) * PY, TILE, sp * PY);
+      // stores intérieurs baissés à mi-hauteur sur quelques modules
+      for (let i = 0; i < n; i++) if (rng.next() < 0.35) {
+        const bh = (0.3 + rng.next() * 0.9);
+        R(c, (W * i) / n, 0, W / n, bh, 'rgba(225,228,226,0.55)');
+        p.m.fillStyle = '#666'; p.m.fillRect(((W * i) / n) * PX, 0, (W / n) * PX, bh * PY);
+      }
+      // meneaux et traverses
+      p.m.fillStyle = '#fff';
+      for (let i = 0; i <= n; i++) {
+        const mx = Math.min(W - 0.03, Math.max(0, (W * i) / n - 0.03));
+        R(c, mx, 0, 0.06, H, alu); p.m.fillRect(mx * PX, 0, 0.06 * PX, TILE);
+      }
+      for (const ty of [0, H - sp - 0.03, H - 0.05]) { R(c, 0, ty, W, 0.05, alu); p.m.fillRect(0, ty * PY, TILE, 0.05 * PY); }
+      break;
+    }
   }
-  if (style !== 'industriel') grain(p, 0.35);
+  if (style !== 'industriel' && style !== 'verre') grain(p, 0.35);
   // assombrissement léger en pied de tuile de rez-de-chaussée (salissures)
   if (role === 'ground' || role === 'door') shade(c, 0, H - 0.5, W, 0.5, 0, 0.12);
   return finish(p);
@@ -448,10 +684,18 @@ export async function buildFacades(base = 'textures/'): Promise<FacadeSet> {
     loadImage(base + 'concrete_wall_003_diff.jpg'), loadImage(base + 'plastered_stone_wall_diff.jpg'), loadImage(base + 'beige_wall_001_diff.jpg'),
   ]);
   const im: WallImages = { plaster, brick, concrete, stone, beige };
-  const layers = STYLES.length * ROLES.length + SHOP_TILES;
+  // une couche par tuile réellement peinte ; les emprunts renvoient à la couche d'une autre tuile
+  const propres: [FacadeStyle, TileRole][] = [];
+  for (const style of STYLES) for (const role of ROLES) if (!EMPRUNTS[style]?.[role]) propres.push([style, role]);
+  const couche = new Map<string, number>(propres.map(([st, ro], i) => [st + '|' + ro, i]));
+  for (const style of STYLES) for (const role of ROLES) {
+    const e = EMPRUNTS[style]?.[role];
+    if (e) couche.set(style + '|' + role, couche.get(e[0] + '|' + e[1])!);
+  }
+  const layers = propres.length + SHOP_TILES;
   const data = new Uint8Array(TILE * TILE * 4 * layers);
   let k = 0;
-  for (const style of STYLES) for (const role of ROLES) { data.set(drawStyle(style, role, im).data, k * TILE * TILE * 4); k++; }
+  for (const [style, role] of propres) { data.set(drawStyle(style, role, im).data, k * TILE * TILE * 4); k++; }
   for (let i = 0; i < SHOP_TILES; i++) { data.set(drawShop(i).data, k * TILE * TILE * 4); k++; }
   const texture = new THREE.DataArrayTexture(data, TILE, TILE, layers);
   texture.format = THREE.RGBAFormat;
@@ -465,7 +709,7 @@ export async function buildFacades(base = 'textures/'): Promise<FacadeSet> {
   texture.needsUpdate = true;
   return {
     texture, layers,
-    layer: (style, role) => STYLES.indexOf(style) * ROLES.length + ROLES.indexOf(role),
-    shop: (i) => STYLES.length * ROLES.length + (((i % SHOP_TILES) + SHOP_TILES) % SHOP_TILES),
+    layer: (style, role) => couche.get(style + '|' + role)!,
+    shop: (i) => propres.length + (((i % SHOP_TILES) + SHOP_TILES) % SHOP_TILES),
   };
 }

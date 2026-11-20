@@ -1,0 +1,74 @@
+// Garde-fous sur la carte livrée (public/maps/montreuil.json).
+//
+// 1. Le réseau routier ne doit pas bouger quand on enrichit le décor : 1 008 trajets d'essai
+//    (tools/essais) ont été validés sur cette chaussée. Les empreintes ci-dessous sont celles de la
+//    carte d'avant l'ajout des données IGN et des enseignes. Si l'on modifie VOLONTAIREMENT la
+//    voirie, il faut rejouer ces trajets, puis mettre les empreintes à jour.
+// 2. Les commerces rattachés à une façade doivent désigner un mur qui existe.
+
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import type { MapFile } from '../src/map/roadnet';
+
+const map = JSON.parse(readFileSync(new URL('../public/maps/montreuil.json', import.meta.url), 'utf8')) as MapFile;
+const sha = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+
+const EMPREINTES: Record<string, string> = {
+  version: '6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b',
+  name: 'dd0041440d8314d2404460e75109c1cf6bd1f96a85c0f7c1f01c8a3a22da74ec',
+  origin: 'a1c3ec589d05346b677708b5cefe194b2ad125073a4090e67c697bc100c54799',
+  rect: 'c3279441746c35ef5a74c632e45f1c790d7813c8ae540bf3422259206eb76b67',
+  chunk: 'ad57366865126e55649ecb23ae1d48887544976efea46a48eb5d85a6eeb4d306',
+  vertices: '13345fefead8031193fadb0336fd2bbb874d2de044d73b7d206742f69e4122e2',
+  edges: 'b5187e6b348368e0d553adbf4492b579c4b1888009d5213fbed3c3c743f709e9',
+  restrictions: 'c8e45076ad69ed01c094f7d2c5c7ca0bcbd320b080d7590954df7195502e5343',
+  chunks: '60787b9ef8056c7df38c56a252397e1ddc984da5addd51b331c11beaba3aca48',
+  lines: 'e3c21d36574e7f79f8c4da2d756d7131147cd4988a259ed4b593341e136f4aa1',
+  areas: 'cdefe9af1dde5a57a69519b2fbd0b93ffaaff5d7fc8d9a5a17bff6df04a67923',
+  trees: 'aeea5021806b4d1531fc7433d39b1e8ca1cd8fbe784a1052a64478099a3c03f7',
+  lamps: 'ba45afae1d2b67e0d5bd9dcf03d6738110a8c4b18b7f2187c82521536c0c7b76',
+  barriers: '22a003ca1c3df52933ba477c1d5954ecb0edc835fbd74722a6ef66f3e6d3ddf2',
+};
+
+describe('carte : réseau routier inchangé', () => {
+  for (const [cle, attendu] of Object.entries(EMPREINTES)) {
+    it(`« ${cle} » est identique à la carte de référence`, () => {
+      expect(sha((map as unknown as Record<string, unknown>)[cle])).toBe(attendu);
+    });
+  }
+
+  it('garde le même nombre de bâtiments (leurs murs servent aux collisions)', () => {
+    expect(map.buildings.length).toBe(12266);
+  });
+});
+
+describe('carte : commerces rattachés aux façades', () => {
+  const vitrines = map.pois.filter((p) => p.k === 'shop' || p.k === 'pharmacy');
+  const lies = vitrines.filter((p) => p.fb !== undefined);
+
+  it('rattache la grande majorité des commerces', () => {
+    expect(vitrines.length).toBeGreaterThan(900);
+    expect(lies.length / vitrines.length).toBeGreaterThan(0.9);
+  });
+
+  it('désigne pour chacun un mur existant, assez long, d’un bâtiment qui n’est pas un auvent', () => {
+    for (const p of lies) {
+      const b = map.buildings[p.fb!];
+      expect(b, `bâtiment ${p.fb} de « ${p.n} »`).toBeDefined();
+      expect(b.t).not.toBe('roof');
+      const n = b.p.length / 2, i = p.fi!, j = (i + 1) % n;
+      expect(i).toBeLessThan(n);
+      const len = Math.hypot(b.p[j * 2] - b.p[i * 2], b.p[j * 2 + 1] - b.p[i * 2 + 1]);
+      expect(p.f0!).toBeGreaterThanOrEqual(0);
+      expect(p.f1!).toBeGreaterThanOrEqual(p.f0!);
+      expect(p.f1!).toBeLessThanOrEqual(len + 0.06);
+    }
+  });
+
+  it('nomme les bouches de métro d’après leur station', () => {
+    const stations = new Set(map.pois.filter((p) => p.k === 'metro').map((p) => p.n));
+    for (const s of ['Croix de Chavaux', 'Mairie de Montreuil', 'Robespierre', 'Porte de Montreuil', 'Gallieni']) expect(stations).toContain(s);
+    expect(stations).not.toContain('Rue de Paris');
+  });
+});

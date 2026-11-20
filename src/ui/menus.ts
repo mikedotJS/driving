@@ -80,7 +80,7 @@ export class Menus {
         card('Commandes et aide', 'Toutes les touches du clavier et les boutons du volant.', '', () => this.help()),
       ),
       h('p', { class: 'credits' },
-        'Données cartographiques © les contributeurs d’OpenStreetMap (ODbL). Ciel et textures : Poly Haven (CC0). ',
+        'Données cartographiques © les contributeurs d’OpenStreetMap (ODbL). Bâtiments : IGN – BD TOPO (Licence Ouverte 2.0). Ciel et textures : Poly Haven (CC0). ',
         'Barème des infractions : Code de la route en vigueur en novembre 2026 (voir la documentation du projet). ',
         'Ce simulateur est un outil d’entraînement : il ne remplace pas les leçons avec un enseignant diplômé.'),
     ));

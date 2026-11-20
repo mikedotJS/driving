@@ -1,5 +1,6 @@
 // Mobilier et signalisation verticale : panneaux (atlas de textures), plaques de rue, feux tricolores
-// à la française (feu principal, répétiteur bas, figurines piétons), arbres, lampadaires, potelets.
+// à la française (feu principal, répétiteur bas, figurines piétons), arbres, lampadaires, potelets,
+// arrêts de bus et bouches de métro à leur vrai nom.
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -9,6 +10,7 @@ import type { Ground } from './ground';
 import { KERB_H } from './city';
 import { GeoBuilder } from './geo';
 import { SIGNS, drawSign } from './signs';
+import { type Enseignes, CLE_TREMIE, auSol, cleAbri, cleBus, cleMetro, panneau, poseBandeau } from './enseignes';
 import { hash32, Rng } from '../core/math';
 
 interface SignPlacement { code: string; text?: string; x: number; z: number; /** direction vers laquelle le panneau fait face */ fx: number; fz: number; y: number; plate?: boolean }
@@ -34,6 +36,9 @@ class Atlas {
     let c = this.cells.get(key);
     if (c) return c;
     const cols = Math.floor(this.w / this.cw), rows = Math.floor(this.h / this.ch);
+    // atlas plein : on réutilise les premières cellules, mais on le dit — un panneau déjà posé
+    // afficherait alors le dessin d'un autre
+    if (this.next === cols * rows) console.warn(`Atlas de panneaux plein (${cols * rows} cellules) : les premières sont réutilisées`);
     const i = this.next++ % (cols * rows);
     const x = (i % cols) * this.cw, y = Math.floor(i / cols) * this.ch;
     const src = drawSign(code, Math.max(this.cw, this.ch) - 8, text);
@@ -48,6 +53,14 @@ class Atlas {
     this.texture.needsUpdate = true;
     return c;
   }
+}
+
+/** Arrêt de bus ou bouche de métro : position sur le trottoir, sens de la rue (t), côté opposé à la chaussée (a). */
+interface Transport {
+  kind: 'bus' | 'metro'; x: number; z: number; tx: number; tz: number; ax: number; az: number;
+  tete: string | null; abri: string | null;
+  /** centre et sens de l'abri ou de la trémie d'escalier, s'il y a la place */
+  annexe: { x: number; z: number; dir: 1 | -1 } | null;
 }
 
 interface Lamp { index: number; ctl: SignalController; group: number; role: 'r' | 'y' | 'g' | 'pr' | 'pg' }
@@ -65,6 +78,7 @@ export class Props {
   private signMat: THREE.MeshStandardMaterial;
   private plateMat: THREE.MeshStandardMaterial;
   private signsByChunk = new Map<string, SignPlacement[]>();
+  private transportsByChunk = new Map<string, Transport[]>();
   private treesByChunk = new Map<string, number[][]>();
   private lampsByChunk = new Map<string, InstanceList>();
   private bollardsByChunk = new Map<string, InstanceList>();
@@ -84,13 +98,15 @@ export class Props {
   /** positions des obstacles ponctuels (poteaux, arbres) pour les collisions */
   readonly posts: { x: number; z: number; r: number }[] = [];
 
-  constructor(private net: RoadNet, private mats: MaterialLib, private ground: Ground) {
+  /** `enseignes` : atlas des textes du décor (City.enseignes) ; sans lui, ni arrêts de bus ni bouches de métro. */
+  constructor(private net: RoadNet, private mats: MaterialLib, private ground: Ground, private enseignes?: Enseignes) {
     this.chunk = net.map.chunk;
     this.signMat = new THREE.MeshStandardMaterial({ map: this.signAtlas.texture, alphaTest: 0.5, roughness: 0.45, metalness: 0.05 });
     this.plateMat = new THREE.MeshStandardMaterial({ map: this.plateAtlas.texture, alphaTest: 0.5, roughness: 0.35, metalness: 0.1 });
     this.buildShared();
     this.placeSigns();
     this.placeSignals();
+    this.placeTransports();
     this.placeTrees();
     this.placeLamps();
     this.placeBollards();
@@ -260,6 +276,85 @@ export class Props {
         this.sign(paris ? 'PLAQUE_PARIS' : 'PLAQUE_BANLIEUE', k.x, k.z, -nx, -nz, 2.55, text, true);
       }
     }
+  }
+
+  // ───────────────────────── arrêts de bus, bouches de métro ─────────────────────────
+  /**
+   * Les points OpenStreetMap donnent la position et le nom ; l'orientation est déduite de la rue la
+   * plus proche. L'abri ou l'escalier n'est posé que s'il tient sur le trottoir sans toucher un mur.
+   */
+  private placeTransports() {
+    if (!this.enseignes) return;
+    for (const p of this.net.map.pois) {
+      if ((p.k !== 'bus' && p.k !== 'metro') || !p.n) continue;
+      const loc = this.net.locate(p.x, p.z);
+      let tx = 1, tz = 0, ax = 0, az = 1;
+      if (loc) {
+        const pt = loc.edge.line.at(loc.s);
+        tx = pt.tx; tz = pt.tz;
+        const side = (p.x - pt.x) * -tz + (p.z - pt.z) * tx >= 0 ? 1 : -1;
+        ax = -tz * side; az = tx * side;
+      }
+      // point saisi au bord de la chaussée ou dessus : on recule jusqu'au trottoir
+      let x = p.x, z = p.z, ok = false;
+      for (let k = 0; k <= 8 && !ok; k++) {
+        if (!this.ground.isRoad(x, z) && !this.ground.isRoad(x - ax * 0.35, z - az * 0.35)) ok = true;
+        else { x += ax * 0.5; z += az * 0.5; }
+      }
+      if (!ok) continue;
+      const bus = p.k === 'bus';
+      // emprise de l'abri (4 × 1,5 m, en retrait du poteau) ou de l'escalier (3,2 × 1,4 m, dans l'axe de la bouche)
+      const hl = bus ? 2.0 : 1.6, hw = bus ? 0.75 : 0.7, recul = bus ? 0.95 : 0, avance = bus ? 2.5 : 2.0;
+      let annexe: Transport['annexe'] = null;
+      if (bus ? p.sh : true) {
+        for (const dir of [1, -1] as const) {
+          const cx = x + ax * recul + tx * avance * dir, cz = z + az * recul + tz * avance * dir;
+          let libre = !this.ground.bodyHits(cx, cz, tx, tz, hl + 0.1, hw + 0.1);
+          for (const [u, v] of [[1, 1], [1, -1], [-1, 1], [-1, -1], [0, -1]]) {
+            if (libre && this.ground.isRoad(cx + tx * hl * u + ax * hw * v, cz + tz * hl * u + az * hw * v)) libre = false;
+          }
+          if (libre) { annexe = { x: cx, z: cz, dir }; break; }
+        }
+      }
+      this.push(this.transportsByChunk, x, z, {
+        kind: bus ? 'bus' : 'metro', x, z, tx, tz, ax, az,
+        tete: bus ? cleBus(p) : cleMetro(p), abri: bus && annexe ? cleAbri(p) : null, annexe,
+      });
+      this.posts.push({ x, z, r: 0.07 });
+      if (annexe) {
+        // coins de l'abri ou du garde-corps, pour les collisions
+        for (const [u, v] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) this.posts.push({ x: annexe.x + tx * hl * u + ax * hw * v, z: annexe.z + tz * hl * u + az * hw * v, r: 0.08 });
+      }
+    }
+  }
+
+  private drawTransport(t: Transport, textes: GeoBuilder, metal: GeoBuilder) {
+    const E = this.enseignes!;
+    const y0 = KERB_H;
+    const tete = E.get(t.tete);
+    if (t.kind === 'bus') {
+      // poteau d'arrêt : la tête est en drapeau, perpendiculaire à la rue, lisible dans les deux sens
+      boxPost(metal, t.x, t.z, y0, y0 + 2.2 + (tete?.h ?? 0), 0.035);
+      if (tete) for (const s of [1, -1]) panneau(textes, tete, t.x + t.tx * 0.045 * s, y0 + 2.2 + tete.h / 2, t.z + t.tz * 0.045 * s, t.tx * s, t.tz * s, tete.w, tete.h);
+      const a = t.annexe;
+      if (!a) return;
+      // abri : toit, deux poteaux arrière, caisson d'affichage au bout ; le nom de l'arrêt court sur la rive du toit
+      box(metal, a.x, y0 + 2.42, a.z, t.tx, t.tz, 4.0, 0.08, 1.5);
+      for (const u of [1.9, -1.9]) boxPost(metal, a.x + t.tx * u + t.ax * 0.68, a.z + t.tz * u + t.az * 0.68, y0, y0 + 2.4, 0.035);
+      box(metal, a.x + t.tx * 1.92 * a.dir, y0 + 1.25, a.z + t.tz * 1.92 * a.dir, t.tx, t.tz, 0.12, 1.8, 1.2);
+      const nom = E.get(t.abri);
+      if (nom) poseBandeau(textes, nom, a.x - t.ax * 0.75, y0 + 2.42, a.z - t.az * 0.75, -t.ax, -t.az, 4.0, 0.26);
+      return;
+    }
+    // métro : mât et totem au nom de la station, en drapeau comme l'arrêt de bus
+    boxPost(metal, t.x, t.z, y0, y0 + 2.75 + (tete?.h ?? 0), 0.05);
+    if (tete) for (const s of [1, -1]) panneau(textes, tete, t.x + t.tx * 0.06 * s, y0 + 2.75 + tete.h / 2, t.z + t.tz * 0.06 * s, t.tx * s, t.tz * s, tete.w, tete.h);
+    const a = t.annexe, marches = E.get(CLE_TREMIE);
+    if (!a || !marches) return;
+    // escalier : le sol reste plat, l'image des marches et le garde-corps sur trois côtés suggèrent la trémie
+    auSol(textes, marches, a.x, y0 + 0.02, a.z, -t.tx * a.dir, -t.tz * a.dir);
+    for (const v of [0.72, -0.72]) box(metal, a.x + t.ax * v, y0 + 0.55, a.z + t.az * v, t.tx, t.tz, 3.2, 1.1, 0.07);
+    box(metal, a.x + t.tx * 1.6 * a.dir, y0 + 0.55, a.z + t.tz * 1.6 * a.dir, t.tx, t.tz, 0.07, 1.1, 1.5);
   }
 
   // ───────────────────────── feux tricolores ─────────────────────────
@@ -470,12 +565,20 @@ export class Props {
   }
 
   // ───────────────────────── construction par dalle ─────────────────────────
-  /** Ajoute au groupe de la dalle son mobilier. */
-  populateChunk(key: string, group: THREE.Group) {
+  /**
+   * Ajoute au groupe de la dalle son mobilier. `textes` est le lot d'enseignes de la dalle (voir
+   * City.decorators) : les noms d'arrêts et de stations s'y ajoutent sans appel de dessin de plus.
+   */
+  populateChunk(key: string, group: THREE.Group, textes?: GeoBuilder) {
+    const add = (g: GeoBuilder, mat: THREE.Material) => { if (g.empty) return; const mesh = new THREE.Mesh(g.build(), mat); mesh.castShadow = true; mesh.receiveShadow = true; mesh.matrixAutoUpdate = false; group.add(mesh); };
+    // poteaux des panneaux, et avec eux abris de bus et garde-corps du métro : un seul lot de métal gris
+    const pole = new GeoBuilder();
+    const transports = this.transportsByChunk.get(key);
+    if (transports && textes) for (const t of transports) this.drawTransport(t, textes, pole);
     // panneaux
     const signs = this.signsByChunk.get(key);
     if (signs) {
-      const face = new GeoBuilder(), plate = new GeoBuilder(), back = new GeoBuilder(), pole = new GeoBuilder();
+      const face = new GeoBuilder(), plate = new GeoBuilder(), back = new GeoBuilder();
       const poleSeen = new Set<string>();
       for (const s of signs) {
         const info = SIGNS[s.code] ?? { w: 0.6, h: 0.6 };
@@ -507,9 +610,9 @@ export class Props {
           this.posts.push({ x: s.x, z: s.z, r: 0.06 });
         }
       }
-      const add = (g: GeoBuilder, mat: THREE.Material) => { if (g.empty) return; const mesh = new THREE.Mesh(g.build(), mat); mesh.castShadow = true; mesh.receiveShadow = true; mesh.matrixAutoUpdate = false; group.add(mesh); };
-      add(face, this.signMat); add(plate, this.plateMat); add(back, this.mats.metalGrey); add(pole, this.mats.metalGrey);
+      add(face, this.signMat); add(plate, this.plateMat); add(back, this.mats.metalGrey);
     }
+    add(pole, this.mats.metalGrey);
     // arbres
     const trees = this.treesByChunk.get(key);
     if (trees) {
@@ -571,6 +674,28 @@ function boxPost(g: GeoBuilder, x: number, z: number, y0: number, y1: number, r:
     const cy = uz * 0 - 0 * 0; void cy;
     const crossX = 0 * 0 - uz * (y1 - y0), crossZ = ux * (y1 - y0) - 0;
     if (crossX * nx + crossZ * nz >= 0) g.quadIdx(a, b, c, d); else g.quadIdx(a, d, c, b);
+  }
+}
+
+/** Boîte pleine centrée en (cx, cy, cz) : longueur `lt` selon (tx, tz), hauteur `h`, largeur `la` en travers. */
+function box(g: GeoBuilder, cx: number, cy: number, cz: number, tx: number, tz: number, lt: number, h: number, la: number) {
+  const ax = -tz, az = tx;
+  const P = (u: number, v: number, w: number): [number, number, number] => [cx + tx * u * lt / 2 + ax * w * la / 2, cy + v * h / 2, cz + tz * u * lt / 2 + az * w * la / 2];
+  // chaque face : quatre coins dans l'ordre, et sa normale ; l'ordre des sommets est corrigé d'après elle
+  const faces: [[number, number, number][], [number, number, number]][] = [
+    [[P(-1, -1, 1), P(1, -1, 1), P(1, 1, 1), P(-1, 1, 1)], [ax, 0, az]],
+    [[P(-1, -1, -1), P(1, -1, -1), P(1, 1, -1), P(-1, 1, -1)], [-ax, 0, -az]],
+    [[P(1, -1, -1), P(1, -1, 1), P(1, 1, 1), P(1, 1, -1)], [tx, 0, tz]],
+    [[P(-1, -1, -1), P(-1, -1, 1), P(-1, 1, 1), P(-1, 1, -1)], [-tx, 0, -tz]],
+    [[P(-1, 1, -1), P(1, 1, -1), P(1, 1, 1), P(-1, 1, 1)], [0, 1, 0]],
+    [[P(-1, -1, -1), P(1, -1, -1), P(1, -1, 1), P(-1, -1, 1)], [0, -1, 0]],
+  ];
+  for (const [q, n] of faces) {
+    const ids = q.map((p, k) => g.vertex(p[0], p[1], p[2], n[0], n[1], n[2], k === 1 || k === 2 ? 1 : 0, k >= 2 ? 1 : 0));
+    const ux = q[1][0] - q[0][0], uy = q[1][1] - q[0][1], uz = q[1][2] - q[0][2];
+    const vx = q[3][0] - q[0][0], vy = q[3][1] - q[0][1], vz = q[3][2] - q[0][2];
+    const d = (uy * vz - uz * vy) * n[0] + (uz * vx - ux * vz) * n[1] + (ux * vy - uy * vx) * n[2];
+    if (d >= 0) g.quadIdx(ids[0], ids[1], ids[2], ids[3]); else g.quadIdx(ids[0], ids[3], ids[2], ids[1]);
   }
 }
 

@@ -122,9 +122,9 @@ export class Game implements MenuHost {
     await tick();
     this.ground = new Ground(map);
     this.city = new City(this.net, this.mats);
-    this.props = new Props(this.net, this.mats, this.ground);
+    this.props = new Props(this.net, this.mats, this.ground, this.city.enseignes);
     this.parked = new ParkedCars(this.net);
-    this.city.decorators.push((k, g) => this.props.populateChunk(k, g), (k, g) => this.parked.populateChunk(k, g));
+    this.city.decorators.push((k, g, textes) => this.props.populateChunk(k, g, textes), (k, g) => this.parked.populateChunk(k, g));
     this.scene.add(this.city.group, this.props.group);
     for (const p of this.props.posts) {
       const k = (Math.floor(p.x / 16) + 4096) * 8192 + Math.floor(p.z / 16) + 4096;

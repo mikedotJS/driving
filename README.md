@@ -116,7 +116,21 @@ citadine réelle, volant émulé, fluidité mesurée sur une carte graphique ré
 
 - Plan des rues, sens uniques, limitations, feux, stops, passages piétons, bâtiments, arbres et
   espaces verts issus d'**OpenStreetMap** : 85 km de voirie, 491 carrefours dont 354 en priorité à
-  droite, 1 098 passages piétons, 12 265 bâtiments.
+  droite, 1 098 passages piétons, 12 266 bâtiments.
+- **Des bâtiments au vrai gabarit** : sur les emprises OpenStreetMap, la hauteur de 72 % des
+  bâtiments (73 % de la surface bâtie) est celle mesurée par l'IGN (BD TOPO), 8 % viennent
+  d'OpenStreetMap, le reste est estimé. Le matériau des murs et du toit (meulière, brique, pierre,
+  béton ; tuiles, ardoises, zinc) et la décennie de construction sont connus pour un peu moins d'un
+  bâtiment sur deux et décident du style, de la teinte et de la forme du toit.
+- **Des rues à leur nom** : 881 commerces, cafés et restaurants portent leur vrai nom
+  (OpenStreetMap) sur un bandeau d'enseigne, à la couleur de leur métier ou de leur chaîne, sur la
+  façade où ils se trouvent ; les 30 bouches de métro affichent leur station et leur ligne (Croix
+  de Chavaux, Mairie de Montreuil, Robespierre, Porte de Montreuil, Maraîchers, Gallieni, Porte de
+  Bagnolet), 138 arrêts de bus leur nom et leurs lignes, 131 édifices (Hôtel de Ville, églises,
+  théâtre, tours) une plaque à leur nom ; plaques de rue à chaque carrefour.
+- Ce qui reste dessiné par le programme : les façades elles-mêmes (fenêtres, portes, vitrines),
+  qui ne reproduisent pas l'immeuble réel. Le détail, les chiffres et les captures sont dans
+  [`docs/realisme.md`](docs/realisme.md#6-le-décor--ce-qui-est-réel-ce-qui-est-dessiné).
 - Signalisation française : panneaux dessinés d'après l'instruction interministérielle, feux
   tricolores placés avant le carrefour avec leur **répétiteur bas**, figurines piétons, marquages
   T1/T'1/T3/T'2, lignes d'effet des feux, plaques de rue parisiennes.
@@ -128,7 +142,9 @@ citadine réelle, volant émulé, fluidité mesurée sur une carte graphique ré
 ```
 tools/            préparation des données (hors jeu)
   fetch-osm.sh      téléchargement OpenStreetMap par tuiles
-  build-map.mjs     OSM → public/maps/montreuil.json (graphe, profils en travers, polygones)
+  fetch-ign.sh      téléchargement des bâtiments de la BD TOPO (IGN) : hauteurs, matériaux, dates
+  build-map.mjs     OSM (+ attributs IGN) → public/maps/montreuil.json (graphe, profils en travers, polygones,
+                    commerces rattachés à leur façade, stations de métro)
   render-map.mjs    rendu 2D de contrôle de la carte
   fetch-assets.sh, prepare-assets.py   textures et ciel Poly Haven
 src/
@@ -137,24 +153,34 @@ src/
   input/            volant / manette / clavier, retour de force WebHID
   traffic/          véhicules IA, piétons et cyclistes
   rules/            catalogue d'infractions et détection des fautes
-  world/            génération du décor (chaussée, façades, panneaux, mobilier, stationnement)
+  world/            génération du décor (chaussée, façades, enseignes, panneaux, mobilier, stationnement)
   render/           éclairage, matériaux, caméras et rétroviseurs, modèles 3D
   audio/            son moteur synthétisé, voix du moniteur
   game/, ui/        leçons, examen, démonstration (pilote automatique), réglages, écrans
 tests/            tests (physique et réalisme, volant émulé, barème, réseau, circulation, règles, pilote automatique)
 tools/essais/     diagnostics : trace d'un trajet, chevauchements, plan de dessus d'un carrefour, balayage,
-                  contrôle des leçons et du volant (simulé) dans le navigateur, mesure de fluidité
+                  contrôle des leçons et du volant (simulé) dans le navigateur, mesure de fluidité,
+                  budget de rendu (appels de dessin et triangles par passe)
 tools/voix/       répliques du moniteur : textes, lots, découpage des enregistrements
 dev/              pages de mise au point de modules isolés
 ```
 
 `npm test` lance les tests ; `npm run map:fetch && npm run map:build` régénère la carte
-(il suffit de changer la zone dans `tools/fetch-osm.sh` et `tools/build-map.mjs` pour un autre quartier).
+(il suffit de changer la zone dans `tools/fetch-osm.sh`, `tools/fetch-ign.sh` et `tools/build-map.mjs` pour un autre
+quartier ; sans `data/ign-raw`, la carte se construit quand même, avec des hauteurs estimées).
 
 ## Limites connues
 
 - Le relief n'est pas modélisé (terrain plat), le boulevard périphérique et les tunnels sont exclus.
-- Les façades sont procédurales : la silhouette des îlots est réelle, pas l'architecture de chaque immeuble.
+- Les façades sont procédurales : l'emprise, la hauteur, le matériau des murs et du toit, l'époque et
+  l'usage de chaque bâtiment sont réels quand la BD TOPO les connaît (le matériau pour un peu moins
+  d'un bâtiment sur deux, sinon celui du voisin), mais pas le dessin de sa façade ni la forme exacte
+  de son toit. Les églises et les monuments n'ont pas de modèle propre : seule une plaque les nomme.
+- Les noms des commerces sont ceux d'OpenStreetMap à la date du téléchargement : une boutique qui a
+  changé d'enseigne ou qui n'y figure pas n'est pas à jour dans le jeu. Les bandeaux portent le nom
+  en texte, sans logo ; 44 commerces sur 982 n'ont pu être rattachés à aucun mur et 57 n'ont pas de
+  nom. Les arrêts de bus et les bouches de métro sont orientés d'après la rue la plus proche ;
+  l'escalier du métro est une image posée au sol, le terrain reste plat.
 - Les régimes de priorité viennent d'OpenStreetMap : un stop ou un feu non cartographié devient une
   priorité à droite dans le jeu.
 - Les cyclistes ne circulent que sur les bandes cyclables cartographiées (4 km) ; les voitures de
@@ -167,7 +193,8 @@ dev/              pages de mise au point de modules isolés
 
 ## Crédits et licences
 
-- Données cartographiques © les contributeurs d'[OpenStreetMap](https://www.openstreetmap.org/copyright), licence ODbL.
+- Données cartographiques (rues, emprises des bâtiments, noms des commerces, des arrêts et des stations) © les contributeurs d'[OpenStreetMap](https://www.openstreetmap.org/copyright), licence ODbL.
+- Hauteurs, étages, matériaux et dates des bâtiments : IGN – BD TOPO, [Licence Ouverte Etalab 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/).
 - Ciel HDR et textures : [Poly Haven](https://polyhaven.com), CC0.
 - Moteur 3D : [three.js](https://threejs.org), licence MIT.
 - Voix du moniteur : synthèse [ElevenLabs](https://elevenlabs.io) (voix « Bastien », modèle multilingue v2).

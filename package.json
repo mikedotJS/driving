@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "map:fetch": "bash tools/fetch-osm.sh",
+    "map:fetch": "bash tools/fetch-osm.sh && bash tools/fetch-ign.sh",
     "map:build": "node tools/build-map.mjs",
     "test:endurance": "GRAINES=8 vitest run --config tools/vitest.config.ts tools/essais/balayage.test.ts"
   },

@@ -27,9 +27,10 @@ export class GeoBuilder {
 
   /**
    * Polygone horizontal (anneau extérieur + trous, coordonnées x,z à plat) à l'altitude y,
-   * face vers le haut. UV = coordonnées monde × uvScale.
+   * face vers le haut. UV = coordonnées monde × uvScale. `layer` : couche de la texture tableau,
+   * quand le polygone est versé dans un lot de façades (attribut libre = u, v, couche).
    */
-  polygon(outer: ArrayLike<number>, holes: ArrayLike<number>[], y: number, uvScale: number, ox = 0, oz = 0, scale = 1, r = 1, g = 1, b = 1) {
+  polygon(outer: ArrayLike<number>, holes: ArrayLike<number>[], y: number, uvScale: number, ox = 0, oz = 0, scale = 1, r = 1, g = 1, b = 1, layer = 0) {
     const flat: number[] = [];
     const holeIdx: number[] = [];
     for (let i = 0; i < outer.length; i++) flat.push(outer[i]);
@@ -38,7 +39,7 @@ export class GeoBuilder {
     const base = this.vertexCount;
     for (let i = 0; i < flat.length; i += 2) {
       const x = ox + flat[i] * scale, z = oz + flat[i + 1] * scale;
-      this.vertex(x, y, z, 0, 1, 0, x * uvScale, z * uvScale, r, g, b);
+      this.vertex(x, y, z, 0, 1, 0, x * uvScale, z * uvScale, r, g, b, x * uvScale, z * uvScale, layer);
     }
     for (let i = 0; i < tris.length; i += 3) {
       const a = tris[i], bb = tris[i + 1], c = tris[i + 2];

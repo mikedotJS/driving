@@ -1697,3 +1697,18 @@ export function drawRoadMark(kind: RoadMark, size = 256): HTMLCanvasElement {
   wearPaint(cv, hashString(kind));
   return cv;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Aides de texte partagées avec les enseignes (src/world/enseignes.ts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export { drawText, splitTwo };
+export type { TextOpts };
+
+/** Largeur d'encre de `text` à la hauteur de capitale `capH`, sans limite de largeur. */
+export function textWidth(g: Ctx, text: string, capH: number, o: TextOpts = {}): number {
+  g.save();
+  const w = fitText(g, text, 1e6, capH, o).w;
+  g.restore();
+  return w;
+}

@@ -14,7 +14,23 @@ export interface RawEdge {
 }
 export interface RawVertex { x: number; z: number; sig?: number; xing?: number; stop?: number; yield?: number; mini?: number; exit?: number; dead?: number }
 export interface RawPoly { o: number[]; h: number[][] }
-export interface RawBuilding { p: number[]; h: number; l: number; t: string; pa?: number; n?: string }
+/**
+ * Bâtiment : emprise OpenStreetMap (p), hauteur (h, m) et niveaux (l). Les champs suivants viennent
+ * de la BD TOPO de l'IGN et sont tous facultatifs (absents si le bâtiment n'a pas d'équivalent IGN
+ * ou si l'attribut y est inconnu) :
+ *  g  1 si h est la hauteur mesurée par l'IGN (à l'égout du toit) ; sinon h vient d'OSM ou est estimée
+ *  m, m2  matériau principal et secondaire des murs : 1 pierre, 2 meulière, 3 béton, 4 briques,
+ *         5 aggloméré, 6 bois, 9 autres
+ *  r  matériau principal du toit : 1 tuiles, 2 ardoises, 3 zinc ou aluminium, 4 béton, 9 autres
+ *  y  décennie d'apparition (1930 = années 1930 ; les dates du cadastre sont arrondies)
+ *  u, u2  usage principal et secondaire : h résidentiel, c commercial et services, i industriel,
+ *         s sportif, a annexe, r religieux, g agricole (u « h » + u2 « c » : commerce sous des logements)
+ *  lg 1 pour une construction légère (hangar, abri, auvent)
+ */
+export interface RawBuilding {
+  p: number[]; h: number; l: number; t: string; pa?: number; n?: string;
+  g?: number; m?: number; m2?: number; r?: number; y?: number; u?: string; u2?: string; lg?: number;
+}
 export interface MapFile {
   version: number; name: string; attribution: string;
   origin: { lat: number; lon: number };
@@ -31,7 +47,17 @@ export interface MapFile {
   lines: { k: string; p: number[]; n?: string }[];
   trees: [number, number, number, number, string][];
   lamps: [number, number][];
-  pois: { k: string; x: number; z: number; n?: string; t?: string; sh?: number }[];
+  /**
+   * Points d'intérêt OpenStreetMap. k : shop, pharmacy, bus, metro, velib… ; n : nom ; t : type de
+   * commerce ; b : enseigne de chaîne si elle diffère du nom ; sh : arrêt de bus abrité ; r : lignes de
+   * bus (« 102;115 »). Métro : n est la station, s le nom de la sortie, l la ligne.
+   * Commerces rattachés à une façade : fb indice du bâtiment, fi indice du mur (du sommet fi au
+   * suivant), f0 et f1 portion du mur qui porte la devanture (m depuis le sommet fi).
+   */
+  pois: {
+    k: string; x: number; z: number; n?: string; t?: string; b?: string; sh?: number; r?: string; s?: string; l?: string;
+    fb?: number; fi?: number; f0?: number; f1?: number;
+  }[];
 }
 
 // ───────────── Structures du réseau ─────────────

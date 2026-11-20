@@ -201,7 +201,89 @@ graphique utilisée par le navigateur et un conseil de réglage (rapport copiabl
 
 La simulation elle-même (physique à 1 kHz, circulation, règles) coûte 0,18 ms de processeur par image.
 
-## 6. Captures
+## 6. Le décor : ce qui est réel, ce qui est dessiné
+
+Le jeu ne contient aucune photo ni aucun modèle 3D d'un immeuble réel. Il assemble des données
+ouvertes, puis dessine le reste.
+
+| Élément | Source | Ce qui est réel | Ce qui est dessiné par le programme |
+|---|---|---|---|
+| Rues, carrefours, feux, passages | OpenStreetMap | tracé, sens, limitations, régimes de priorité, noms | profil en travers (largeur des voies, stationnement) déduit des balises quand il n'est pas saisi |
+| Emprise des bâtiments | OpenStreetMap | le contour au sol de 12 266 bâtiments | — |
+| Hauteur | IGN – BD TOPO, sinon OpenStreetMap | 71,6 % des bâtiments (72,9 % de la surface bâtie) mesurés par l'IGN, à l'égout du toit ; 8,4 % balisés dans OpenStreetMap | 20,0 % estimés d'après la surface, dont les annexes de moins de 60 m² noyées dans un bâtiment IGN cinq fois plus grand (sa hauteur n'est pas la leur) |
+| Murs et toit | IGN – BD TOPO (fichiers fonciers) | matériau des murs pour 44,5 % des bâtiments, du toit pour 44,6 %, décennie de construction pour 54,8 % | pour les autres, matériau repris du voisin de même gabarit à moins de 20 m, sinon tiré au sort |
+| Façades | — | — | **tout le dessin** : fenêtres, portes, balcons, vitrines, choisis parmi douze styles selon le matériau, l'époque, l'usage et le gabarit (la meulière apparente est réservée aux bâtiments de trois niveaux au plus) |
+| Forme du toit | — | — | deux pans ou croupes sur les emprises simples (l'emprise doit remplir 88 % de son enveloppe convexe ; le débord est fermé par une sous-face), comble unique sur les églises, terrasse ailleurs |
+| Commerces | OpenStreetMap | nom, type et position de 982 commerces et pharmacies | couleur du bandeau (par métier, ou par chaîne pour une vingtaine d'enseignes), vitrine, largeur de la devanture |
+| Métro, bus | OpenStreetMap | position des 30 bouches et des 140 arrêts, nom de la station, ligne, lignes de bus, présence d'un abri | orientation (d'après la rue la plus proche), forme du totem, de l'abri et de l'escalier |
+| Édifices nommés | OpenStreetMap | nom de 131 bâtiments (Hôtel de Ville, églises, théâtre, tours, résidences) | la plaque et son emplacement ; un clocher générique sur les églises et chapelles, un beffroi générique sur l'hôtel de ville ; aucun modèle propre |
+| Plaques de rue | OpenStreetMap | nom de la rue | modèle de plaque (émail parisien à cartouche d'arrondissement dans le 20ᵉ, plaque bleue simple à Montreuil) |
+
+### Les enseignes
+
+Chaque commerce d'OpenStreetMap est un point, souvent posé au milieu de la boutique. À la
+construction de la carte (`tools/lib/enseignes.mjs`), il est rattaché au mur sur rue le plus proche
+de son bâtiment — jamais à un mur mitoyen ni à un auvent ; à défaut de rue devant (passage, dalle),
+au mur libre à moins de 6 m. Les commerces d'un même mur se le partagent. Résultat sur la carte
+livrée :
+
+- 938 commerces sur 982 rattachés à une façade (44 sans mur à proximité : kiosques, marchés, cœurs
+  de centre commercial) ;
+- 881 bandeaux à leur vrai nom ; 57 commerces sans nom et 11 locaux vacants ont une vitrine (rideau
+  baissé pour les vacants) mais pas de bandeau ;
+- les 30 bouches de métro portent le nom de leur station, lu dans la relation `stop_area`
+  d'OpenStreetMap (le « nom » d'une bouche y est celui de la sortie), et leur ligne (3 ou 9) ; 24
+  ont la place pour leur escalier ;
+- 138 arrêts de bus nommés, dont 92 avec leur abri (10 abris cartographiés ne tiennent pas sur le
+  trottoir du jeu).
+
+Les noms sont écrits tels qu'ils sont saisis, accents compris ; un nom de plus de 26 caractères est
+coupé à sa première précision ou au dernier mot entier. Aucun logo n'est reproduit.
+
+Limites : les noms datent du téléchargement d'OpenStreetMap ; une vitrine sans commerce cartographié
+peut encore apparaître sur les grands axes (tirage rare, sans nom) ; un commerce saisi dans le
+mauvais bâtiment a son bandeau sur ce bâtiment.
+
+### Ce que cela coûte à l'affichage
+
+Tous les textes (1 124 cellules) tiennent dans un seul atlas de 4096 × 2176 px, dessiné une fois au
+chargement, et dans un seul lot de géométrie par dalle de 100 m (317 dalles sur 640 en ont un ;
+2 552 rectangles sur toute la carte). Mesure sur le jeu compilé, Chromium sans carte graphique,
+1280 × 720, qualité moyenne, moyenne sur le cycle de 6 images des ombres (`tools/essais/budget.cjs`) ;
+« avant » = sans enseignes ni arrêts :
+
+| Point de vue | Appels de dessin | Triangles | Textures |
+|---|---|---|---|
+| Croix de Chavaux, décor seul | 457,5 → 465,8 (+1,8 %) | 2 632,0 k → 2 632,7 k | 36 → 37 |
+| Rue de Paris (Croix de Chavaux), décor seul | 466,8 → 479,0 (+2,6 %) | 1 408,7 k → 1 409,0 k | 39 → 40 |
+| Rue de Paris (Bas-Montreuil), décor seul | 443,5 → 455,5 (+2,7 %) | 2 351,8 k → 2 352,5 k | 36 → 37 |
+| Croix de Chavaux, en conduite | 604,5 → 626,0 (+3,6 %) | 2 408 k → 2 410 k | 41 → 42 |
+| Rue de Paris, en conduite | 647,0 → 660,8 (+2,1 %) | 2 321 k → 2 287 k | 41 → 42 |
+
+Les points en conduite incluent la circulation, qui varie d'une exécution à l'autre (d'où des
+triangles en baisse rue de Paris). Le nombre de programmes de rendu est inchangé (48, 49 en
+conduite). L'atlas occupe environ 36 Mo de mémoire graphique, 48 Mo avec ses niveaux de détail
+(calculé, non mesuré). **Non mesuré** : la cadence d'images sur une vraie carte graphique après ces
+ajouts ; la mesure de la section 5 date d'avant.
+
+### Licences des données
+
+- Rues, emprises, noms des commerces, des arrêts et des stations : © les contributeurs
+  d'OpenStreetMap, licence ODbL.
+- Hauteurs, étages, matériaux et dates des bâtiments : IGN – BD TOPO, Licence Ouverte Etalab 2.0.
+
+Les deux mentions figurent dans la carte (`attribution`), dans le menu du jeu et dans le README.
+
+## 7. Captures
+
+![Rue de Paris : enseignes aux vrais noms](captures/rues-enseignes-rue-de-paris.jpg)
+![Rue de Paris vue du poste de conduite](captures/rues-vue-conducteur-rue-de-paris.jpg)
+![Bouche de métro Croix de Chavaux, ligne 9](captures/rues-metro-croix-de-chavaux.jpg)
+![Arrêt de bus Croix de Chavaux – Rouget de Lisle et son abri](captures/rues-arret-de-bus.jpg)
+![Hôtel de Ville de Montreuil : hauteur IGN et plaque à son nom (la façade reste générique)](captures/rues-hotel-de-ville.jpg)
+![Pavillons de brique et de meulière, toits de tuiles, tours à l'horizon](captures/batiments-pavillons-toits-et-tours.jpg)
+![Croix de Chavaux](captures/batiments-croix-de-chavaux.jpg)
+![Rue Robespierre](captures/batiments-rue-robespierre.jpg)
 
 ![Habitacle, cyclistes devant](captures/habitacle-cyclistes.jpg)
 ![Vue extérieure](captures/vue-exterieure-feu.jpg)

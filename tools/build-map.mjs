@@ -2,11 +2,16 @@
 // Convertit les données OpenStreetMap brutes (data/osm-raw) en carte de jeu compacte
 // (public/maps/montreuil.json) : graphe de rues avec profils en travers, signalisation,
 // polygones de chaussée/trottoir par dalle, bâtiments, espaces verts, mobilier.
+// Les commerces y sont rattachés au mur qui porte leur devanture, les bouches de métro à leur station.
 //
 // Données © les contributeurs d'OpenStreetMap (ODbL).
+// Hauteurs, étages, matériaux et dates des bâtiments : IGN – BD TOPO (Licence Ouverte Etalab 2.0),
+// reportés sur les emprises OSM quand data/ign-raw existe (tools/fetch-ign.sh).
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { loadOsm } from './lib/osm-load.mjs';
+import { loadIgn, apparier } from './lib/ign.mjs';
+import { rattacher, stationsDeMetro } from './lib/enseignes.mjs';
 import * as G from './lib/geom.mjs';
 import { createRequire } from 'node:module';
 const ClipperLib = createRequire(import.meta.url)('clipper-lib');
@@ -126,6 +131,8 @@ function addBuilding(id, tags, ring) {
   const open = tags.wall === 'no' || kind === 'roof' || kind === 'carport';
   let levels = parseFloat(tags['building:levels']);
   let h = parseFloat(tags.height);
+  // une hauteur ou un nombre de niveaux saisis dans OSM priment sur l'IGN (voir l'appariement plus bas)
+  const tagged = levels > 0 || h > 0;
   const r = rnd01(id);
   if (!(levels > 0)) {
     if (h > 0) levels = Math.max(1, Math.round((h - 1) / 3));
@@ -148,7 +155,7 @@ function addBuilding(id, tags, ring) {
   else if (/^(retail|supermarket|commercial|office)$/.test(kind)) type = 'com';
   else if (/^(school|kindergarten|university|college|hospital|public|civic|government)$/.test(kind) || tags.amenity === 'school') type = 'pub';
   else if (/^(house|detached|semidetached_house|bungalow|terrace)$/.test(kind) || (!paris && levels <= 2 && area < 140)) type = 'house';
-  buildings.push({ id, pts, h: r2(h), lv: levels, type, paris, area, name: tags.name });
+  buildings.push({ id, pts, h: r2(h), lv: levels, type, paris, area, name: tags.name, tagged });
   if (!open) {
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i], b = pts[(i + 1) % pts.length];
@@ -777,6 +784,58 @@ let road;
 }
 const keptBuildings = buildings.filter((b) => !b.drop);
 
+// ───────────────────────── Bâtiments : attributs de la BD TOPO (IGN) ─────────────────────────
+// Placé après tout ce qui dessine la chaussée, et sans toucher ni aux emprises ni à la liste :
+// les murs OSM ont déjà servi à dimensionner les rues, le réseau ne doit pas dépendre de l'IGN.
+let ignUsed = false;
+{
+  const ign = loadIgn(new URL('../data/ign-raw', import.meta.url).pathname, proj);
+  if (!ign) {
+    console.warn('ATTENTION : data/ign-raw absent ou vide (bash tools/fetch-ign.sh) — hauteurs estimées, sans matériaux, comme avant.');
+  } else {
+    ignUsed = true;
+    const res = apparier(keptBuildings, ign.list);
+    const st = { apparies: 0, hIgn: 0, hOsm: 0, etages: 0, murs: 0, toits: 0, dates: 0, usages: 0, sIgn: 0, sOsm: 0, sTot: 0 };
+    keptBuildings.forEach((b, i) => {
+      const a = res[i];
+      st.sTot += b.area;
+      if (b.tagged) { st.hOsm++; st.sOsm += b.area; }
+      if (!a) return;
+      st.apparies++;
+      if (a.h > 0 && !b.tagged) {
+        // La hauteur IGN est mesurée à l'égout du toit. Bornes : un plancher pour que le mur reste
+        // visible, 6 m pour les auvents et préaux (un auvent de station-service accolé à un immeuble
+        // n'a pas sa hauteur). Les lieux de culte gardent leur estimation si elle est plus haute :
+        // l'égout d'une nef est bien plus bas que ce qu'on voit depuis la rue.
+        let h = Math.max(2.2, Math.min(110, a.h));
+        if (b.type === 'roof') h = Math.min(h, 6);
+        if (b.type === 'church' && h < b.h) h = b.h;
+        else {
+          b.ign = 1;
+          st.hIgn++; st.sIgn += b.area;
+          b.h = r2(h);
+          // niveaux : ceux de l'IGN s'ils sont cohérents avec la hauteur, sinon déduits de la hauteur
+          // (le rendu étire les étages entre le rez-de-chaussée et le toit)
+          if (b.type === 'roof') b.lv = 1;
+          else if (a.etages) { b.lv = Math.max(1, Math.min(30, Math.round(a.etages))); st.etages++; }
+          else b.lv = Math.max(1, Math.min(30, Math.round((h - 0.6) / 3)));
+        }
+      }
+      if (a.mur) { b.mur = a.mur; if (a.mur2) b.mur2 = a.mur2; st.murs++; }
+      if (a.toit) { b.toit = a.toit; st.toits++; }
+      // les dates du cadastre sont arrondies (pics en 1900, 1920) : la décennie suffit et pèse moins
+      if (a.an) { b.dec = Math.floor(a.an / 10) * 10; st.dates++; }
+      if (a.u) { b.u = a.u; if (a.u2) b.u2 = a.u2; st.usages++; }
+      if (a.leger) b.leger = 1;
+    });
+    const pc = (v) => `${v} (${((v / keptBuildings.length) * 100).toFixed(1)} %)`;
+    log(`IGN BD TOPO : ${ign.list.length} bâtiments en service (${ign.files} fichiers) ; appariés ${pc(st.apparies)}`);
+    log(`  hauteur IGN ${pc(st.hIgn)}, hauteur ou niveaux OSM ${pc(st.hOsm)}, estimée ${pc(keptBuildings.length - st.hIgn - st.hOsm)}`);
+    log(`  en surface bâtie : hauteur IGN ${((st.sIgn / st.sTot) * 100).toFixed(1)} %, OSM ${((st.sOsm / st.sTot) * 100).toFixed(1)} %`);
+    log(`  étages IGN ${pc(st.etages)}, murs ${pc(st.murs)}, toit ${pc(st.toits)}, décennie ${pc(st.dates)}, usage ${pc(st.usages)}`);
+  }
+}
+
 // ───────────────────────── Découpage en dalles ─────────────────────────
 const ci0 = Math.floor(RECT.x0 / CHUNK), ci1 = Math.floor(RECT.x1 / CHUNK);
 const cj0 = Math.floor(RECT.z0 / CHUNK), cj1 = Math.floor(RECT.z1 / CHUNK);
@@ -921,6 +980,7 @@ for (const w of ways.values()) {
 }
 
 const trees = [], lamps = [], pois = [];
+const stations = stationsDeMetro(relations);
 for (const n of nodes.values()) {
   const t = n.tags;
   const p = nodeXZ.get(n.id);
@@ -948,7 +1008,20 @@ for (const n of nodes.values()) {
     const o = { k, x: r2(p[0]), z: r2(p[1]) };
     if (t.name) o.n = t.name;
     if (k === 'shop') o.t = t.shop ?? t.amenity;
+    // l'enseigne d'une chaîne décide de la couleur du bandeau quand le nom seul ne la dit pas
+    if (k === 'shop' && t.brand && t.brand !== t.name) o.b = t.brand;
     if (k === 'bus' && t.shelter === 'yes') o.sh = 1;
+    // lignes desservies, telles qu'affichées sur le poteau d'arrêt
+    if (k === 'bus' && t.route_ref) o.r = t.route_ref;
+    if (k === 'metro') {
+      // le « name » d'une bouche est celui de la sortie : la station vient de la relation stop_area
+      const st = stations.get(n.id);
+      if (st) {
+        if (t.name) o.s = t.name;
+        o.n = st.station;
+        if (st.ligne) o.l = st.ligne;
+      }
+    }
     pois.push(o);
   }
 }
@@ -983,12 +1056,38 @@ for (const w of ways.values()) {
   log(`arbres : ${trees.length} (${before - trees.length} retirés de la chaussée), lampadaires : ${lamps.length}, points : ${pois.length}`);
 }
 
+// ───────────────────────── Commerces : rattachement à la façade ─────────────────────────
+// Chaque commerce nommé reçoit le bâtiment (fb), le mur (fi) et la portion de mur [f0, f1] qui portent
+// sa devanture. Les indices renvoient à la liste finale des bâtiments, dans l'ordre où elle est écrite.
+{
+  const vitrines = pois.filter((p) => p.k === 'shop' || p.k === 'pharmacy');
+  const res = rattacher(
+    vitrines,
+    keptBuildings.map((b) => ({ pts: b.pts.map((p) => [r2(p[0]), r2(p[1])]), type: b.type })),
+    // les rues piétonnes comptent aussi : on n'y roule pas, mais leurs devantures se voient des carrefours
+    [...edges.map((e) => ({ pts: e.pts, half: e.width / 2 })), ...lines.filter((l) => l.kind === 'ped').map((l) => ({ pts: l.pts, half: 2 }))],
+  );
+  let n = 0;
+  const r1 = (v) => Math.round(v * 10) / 10;
+  vitrines.forEach((p, k) => {
+    const r = res[k];
+    if (!r) return;
+    n++;
+    p.fb = r.b; p.fi = r.i; p.f0 = r1(r.f0); p.f1 = r1(r.f1);
+  });
+  log(`commerces rattachés à une façade sur rue : ${n} sur ${vitrines.length} (${vitrines.filter((p) => p.n).length} nommés)`);
+  log(`bouches de métro : ${pois.filter((p) => p.k === 'metro' && p.l).length} avec station et ligne sur ${pois.filter((p) => p.k === 'metro').length}`);
+}
+
 // ───────────────────────── Écriture ─────────────────────────
 const flat = (pts) => { const a = []; for (const p of pts) a.push(r2(p[0]), r2(p[1])); return a; };
 const out = {
   version: 1,
   name: 'Montreuil – Paris 20e',
-  attribution: '© les contributeurs d’OpenStreetMap (ODbL)',
+  // la Licence Ouverte impose la mention de la source dès que les attributs IGN sont dans la carte
+  attribution: ignUsed
+    ? '© les contributeurs d’OpenStreetMap (ODbL) · Bâtiments : IGN – BD TOPO (Licence Ouverte Etalab 2.0)'
+    : '© les contributeurs d’OpenStreetMap (ODbL)',
   origin: { lat: LAT0, lon: LON0 },
   rect: { x0: r2(RECT.x0), z0: r2(RECT.z0), x1: r2(RECT.x1), z1: r2(RECT.z1) },
   chunk: CHUNK,
@@ -1012,6 +1111,15 @@ const out = {
     const o = { p: flat(b.pts), h: b.h, l: b.lv, t: b.type };
     if (b.paris) o.pa = 1;
     if (b.name) o.n = b.name;
+    // attributs IGN, en champs courts et facultatifs (voir RawBuilding dans src/map/roadnet.ts)
+    if (b.ign) o.g = 1;
+    if (b.mur) o.m = b.mur;
+    if (b.mur2) o.m2 = b.mur2;
+    if (b.toit) o.r = b.toit;
+    if (b.dec) o.y = b.dec;
+    if (b.u) o.u = b.u;
+    if (b.u2) o.u2 = b.u2;
+    if (b.leger) o.lg = 1;
     return o;
   }),
   barriers: barriers.map((b) => ({ k: b.kind, h: b.h, p: flat(b.pts) })),

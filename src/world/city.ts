@@ -1,12 +1,16 @@
 // Génération du décor par dalles de 100 m : chaussée, trottoirs, bordures granit, caniveaux,
-// marquages, immeubles (façades par travées), murs et clôtures, espaces verts.
+// marquages, immeubles (façades par travées, toits), murs et clôtures, espaces verts.
+// Les tours et les barres sont dessinées à part, en permanence (silhouette lointaine).
 
 import * as THREE from 'three';
 import type { RoadNet, RawBuilding, RawPoly } from '../map/roadnet';
 import type { MaterialLib } from '../render/materials';
 import { GeoBuilder } from './geo';
 import { buildMarkings, type MarkingSet } from './markings';
-import { BAY_W, type FacadeStyle } from './facades';
+import { BAY_W } from './facades';
+import { apparence, etages, toitEnPente, type Voisin } from './gabarit';
+import { partager, vitrine } from './devantures';
+import { Enseignes, cleCommerce, cleRepere, poseBandeau } from './enseignes';
 import { hash32, Rng } from '../core/math';
 
 export const KERB_H = 0.14;
@@ -18,28 +22,27 @@ type RGB = [number, number, number];
 const hex = (h: number): RGB => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
 // vertex colors : three.js les attend en espace linéaire
 const lin = (c: RGB): RGB => c.map((v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4))) as RGB;
-const PALETTES: Record<FacadeStyle, RGB[]> = {
-  haussmann: [0xffffff, 0xf7f0e2, 0xf2ead8, 0xfffaf0].map(hex),
-  faubourg: [0xffffff, 0xf6efe0, 0xeeeae2, 0xf4e6c8, 0xe9ded0, 0xdfe3e2, 0xf1d9c0].map(hex),
-  brique: [0xffffff, 0xf2d9c4, 0xe9c2a8, 0xfff0d0, 0xd9a58c].map(hex),
-  pavillon: [0xffffff, 0xf3e3c3, 0xe9d2b0, 0xf0c9a8, 0xd9dccf, 0xe6c3b3, 0xcfd9df, 0xf5edd6].map(hex),
-  moderne: [0xffffff, 0xe6e6e2, 0xd9dcdc, 0xf0e8d8].map(hex),
-  contemporain: [0xffffff, 0xf2f2f0, 0xe2e4e3].map(hex),
-  industriel: [0xffffff, 0xd8dcd9, 0xbfc7cf, 0xcfc4b0, 0x9fb0bf].map(hex),
-  public: [0xffffff, 0xf2e2cf, 0xe6d4c0].map(hex),
-};
-const ROOF_TINT: Record<FacadeStyle, RGB[]> = {
-  haussmann: [0x8f979e, 0x9aa2a8].map(hex),
-  faubourg: [0x8f979e, 0xa49d92, 0x9aa2a8].map(hex),
-  brique: [0x8a857c, 0x9a958c].map(hex),
-  pavillon: [0xb0694a, 0xa35d44, 0x8b6f5c, 0x6f7479].map(hex),
-  moderne: [0xa8a59c, 0x9c9a94].map(hex),
-  contemporain: [0xb2b0a8, 0x8f979e].map(hex),
-  industriel: [0x9aa0a3, 0x7f878c, 0xa69f93].map(hex),
-  public: [0x9c9a94, 0x8f979e].map(hex),
-};
+// Les immeubles d'au moins cette hauteur (tours, barres) sont sortis des dalles et dessinés en
+// permanence, par grandes cases : ils se détachent ainsi à l'horizon bien au-delà du rayon de vue,
+// comme la Cité de La Noue ou les tours de la porte de Bagnolet vues depuis la rue de Paris.
+const HORIZON_H = 22;
+const HORIZON_CELL = 500;
+// Recherche du voisin renseigné : pas de la grille et distance maximale (m). 20 m, c'est la maison
+// d'à côté ou celle d'en face ; à 35 m, une seule meulière connue habillait tout un pâté de maisons.
+const VOISIN_CELL = 40;
+const VOISIN_MAX = 20;
+const gabaritDe = (l: number) => (l <= 2 ? 0 : l <= 5 ? 1 : 2);
+// Les haies de la carte ferment surtout des massifs plantés sur les places (Croix de Chavaux) : à
+// hauteur d'homme, ces blocs verts cachaient le pied des façades, les enseignes et les bouches de métro.
+const HAIE_H = 1.1;
+// En dessous de cette longueur, un mur ne reçoit pas de travée à fenêtre : la tuile de 3,2 m y
+// serait comprimée au point de montrer des pierres et des fenêtres moitié moins larges qu'à côté.
+const MUR_ETROIT = 2.3;
 
 const COMMERCIAL = /^(primary|secondary|tertiary)$/;
+
+/** Commerce rattaché à un mur par la carte : portion de mur, type, clé de son enseigne dans l'atlas. */
+interface Devanture { i: number; f0: number; f1: number; t?: string; cle: string | null; graine: number }
 
 export class City {
   readonly group = new THREE.Group();
@@ -49,41 +52,98 @@ export class City {
   private markings: MarkingSet;
   private bBuckets = new Map<string, RawBuilding[]>();
   private barBuckets = new Map<string, { k: string; h: number; p: number[] }[]>();
-  private shared = new Set<string>();
+  /** murs mitoyens : hauteur du plus bas des bâtiments qui se partagent le segment */
+  private shared = new Map<string, number>();
+  /** bâtiments d'habitation dont l'IGN connaît le matériau, rangés par cases de VOISIN_CELL */
+  private connus = new Map<string, { x: number; z: number; g: number; v: Voisin }[]>();
   readonly size: number;
   /** nombre de dalles construites */
   built = 0;
-  /** compléments de décor ajoutés à chaque dalle (mobilier, voitures garées…) */
-  decorators: ((key: string, group: THREE.Group) => void)[] = [];
+  /**
+   * Compléments de décor ajoutés à chaque dalle (mobilier, voitures garées…). `textes` est le lot de
+   * la dalle pour tout ce qui s'écrit avec l'atlas des enseignes : y verser ses panneaux ne coûte
+   * aucun appel de dessin de plus.
+   */
+  decorators: ((key: string, group: THREE.Group, textes: GeoBuilder) => void)[] = [];
+  /** atlas des textes du décor (enseignes, arrêts, stations, plaques) */
+  readonly enseignes: Enseignes;
+  /** commerces de la carte, par bâtiment */
+  private devantures = new Map<RawBuilding, Devanture[]>();
+  /** textes des tours et des barres, dessinées à part : ils attendent la dalle où ils se trouvent */
+  private textesEnAttente = new Map<string, GeoBuilder>();
 
   constructor(readonly net: RoadNet, readonly mats: MaterialLib) {
     this.size = net.map.chunk;
     this.markings = buildMarkings(net);
     mats.roof.vertexColors = true;
     const C = this.size;
+    this.enseignes = new Enseignes(net.map);
+    for (const p of net.map.pois) {
+      if (p.fb === undefined || p.fi === undefined || p.f0 === undefined || p.f1 === undefined) continue;
+      const b = net.map.buildings[p.fb];
+      if (!b) continue;
+      let l = this.devantures.get(b);
+      if (!l) this.devantures.set(b, (l = []));
+      l.push({ i: p.fi, f0: p.f0, f1: p.f1, t: p.k === 'pharmacy' ? 'pharmacy' : p.t, cle: cleCommerce(p), graine: hash32(`${p.x}|${p.z}`) });
+    }
     // répartition des bâtiments par dalle + repérage des murs mitoyens
-    const seen = new Map<string, number>();
+    const seen = new Map<string, [number, number]>();
+    const tall = new Map<string, RawBuilding[]>();
     for (const b of net.map.buildings) {
       let cx = 0, cz = 0;
       const n = b.p.length / 2;
       for (let i = 0; i < n; i++) { cx += b.p[i * 2]; cz += b.p[i * 2 + 1]; }
-      const key = `${Math.floor(cx / n / C)},${Math.floor(cz / n / C)}`;
-      let l = this.bBuckets.get(key);
-      if (!l) this.bBuckets.set(key, (l = []));
+      cx /= n; cz /= n;
+      const far = b.h >= HORIZON_H && b.t !== 'roof';
+      const map = far ? tall : this.bBuckets;
+      const key = far ? `${Math.floor(cx / HORIZON_CELL)},${Math.floor(cz / HORIZON_CELL)}` : `${Math.floor(cx / C)},${Math.floor(cz / C)}`;
+      let l = map.get(key);
+      if (!l) map.set(key, (l = []));
       l.push(b);
+      if (b.m !== undefined && (b.t === 'res' || b.t === 'house')) {
+        const k = `${Math.floor(cx / VOISIN_CELL)},${Math.floor(cz / VOISIN_CELL)}`;
+        let c = this.connus.get(k);
+        if (!c) this.connus.set(k, (c = []));
+        c.push({ x: cx, z: cz, g: gabaritDe(b.l), v: { m: b.m, r: b.r, y: b.y } });
+      }
+      // les auvents ne masquent pas le mur contre lequel ils s'appuient
+      if (b.t === 'roof') continue;
       for (let i = 0; i < n; i++) {
         const k = segKey(b.p[i * 2], b.p[i * 2 + 1], b.p[((i + 1) % n) * 2], b.p[((i + 1) % n) * 2 + 1]);
-        seen.set(k, (seen.get(k) ?? 0) + 1);
+        const e = seen.get(k);
+        if (!e) seen.set(k, [1, b.h]); else { e[0]++; e[1] = Math.min(e[1], b.h); }
       }
     }
-    for (const [k, c] of seen) if (c > 1) this.shared.add(k);
+    for (const [k, e] of seen) if (e[0] > 1) this.shared.set(k, e[1]);
     for (const b of net.map.barriers) {
       const key = `${Math.floor(b.p[0] / C)},${Math.floor(b.p[1] / C)}`;
       let l = this.barBuckets.get(key);
       if (!l) this.barBuckets.set(key, (l = []));
       l.push(b);
     }
+    // silhouette lointaine : un seul maillage par case, façades et toits confondus (le toit prend la
+    // tuile de béton uni), pour ne coûter qu'un appel de dessin par case en vue
+    const toitLointain = mats.facades.layer('moderne', 'plain');
+    for (const [key, list] of tall) {
+      const g = new GeoBuilder(true, 3, 'facade');
+      g.label = 'horizon ' + key;
+      for (const b of list) this.building(b, g, g, this.enAttente, toitLointain);
+      if (g.empty) continue;
+      const mesh = new THREE.Mesh(g.build(), mats.facade);
+      mesh.name = g.label;
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false;
+      this.group.add(mesh);
+    }
   }
+
+  /** Lot de textes en attente pour la dalle qui contient (x, z). */
+  private enAttente = (x: number, z: number): GeoBuilder => {
+    const key = `${Math.floor(x / this.size)},${Math.floor(z / this.size)}`;
+    let g = this.textesEnAttente.get(key);
+    if (!g) this.textesEnAttente.set(key, (g = new GeoBuilder()));
+    return g;
+  };
 
   /** Construit immédiatement toutes les dalles dans un rayon donné. */
   ensureAround(x: number, z: number, radius: number) {
@@ -216,11 +276,15 @@ export class City {
     }
 
     // ── bâtiments ──
+    // enseignes, plaques, noms d'arrêts : un seul lot par dalle, sur l'atlas commun
+    const textes = this.textesEnAttente.get(key) ?? new GeoBuilder();
+    this.textesEnAttente.delete(key);
+    textes.label = key + ' enseignes';
     const list = this.bBuckets.get(key);
     if (list) {
       const walls = new GeoBuilder(true, 3, 'facade'), roofs = new GeoBuilder(true);
       walls.label = key + ' façades'; roofs.label = key + ' toits';
-      for (const b of list) this.building(b, walls, roofs);
+      for (const b of list) this.building(b, walls, roofs, () => textes);
       add(walls, m.facade, true); add(roofs, m.roof, true);
     }
 
@@ -232,66 +296,127 @@ export class City {
       for (const b of bars) {
         const g = b.k === 'hedge' ? hedge : b.k === 'wall' ? wall : fence;
         const t = b.k === 'hedge' ? 0.7 : b.k === 'wall' ? 0.24 : 0.05;
-        for (let i = 0; i + 3 < b.p.length; i += 2) boxWall(g, b.p[i], b.p[i + 1], b.p[i + 2], b.p[i + 3], KERB_H, KERB_H + b.h, t);
+        const h = b.k === 'hedge' ? Math.min(b.h, HAIE_H) : b.h;
+        for (let i = 0; i + 3 < b.p.length; i += 2) boxWall(g, b.p[i], b.p[i + 1], b.p[i + 2], b.p[i + 3], KERB_H, KERB_H + h, t);
       }
-      add(wall, m.wall, true); add(fence, m.fence, true); add(hedge, m.hedge, true);
+      // un grillage ne porte pas d'ombre pleine
+      add(wall, m.wall, true); add(fence, m.fence, false); add(hedge, m.hedge, true);
     }
 
-    for (const d of this.decorators) d(key, group);
+    for (const d of this.decorators) d(key, group, textes);
+    // sans ombre portée : un panneau plaqué au mur n'en projette pas de visible, et la passe d'ombre
+    // redessine chaque lot jusqu'à trois fois
+    add(textes, this.enseignes.material);
     group.updateMatrixWorld(true);
     this.group.add(group);
     this.built++;
   }
 
-  private pickStyle(b: RawBuilding, rng: Rng): FacadeStyle {
-    const r = rng.next();
-    if (b.t === 'indus') return 'industriel';
-    if (b.t === 'com') return r < 0.5 ? 'contemporain' : 'industriel';
-    if (b.t === 'pub') return 'public';
-    if (b.t === 'church') return 'haussmann';
-    if (b.t === 'house') return 'pavillon';
-    if (b.pa) {
-      if (b.l >= 5) return r < 0.42 ? 'haussmann' : r < 0.66 ? 'faubourg' : r < 0.86 ? 'brique' : 'moderne';
-      return r < 0.7 ? 'faubourg' : 'brique';
+  /** Bâtiment renseigné le plus proche, de même gabarit, pour deviner le matériau d'un bâtiment sans donnée. */
+  private voisin(b: RawBuilding, cx: number, cz: number): Voisin | undefined {
+    if (b.m !== undefined || (b.t !== 'res' && b.t !== 'house') || b.lg) return undefined;
+    const gab = gabaritDe(b.l);
+    const ci = Math.floor(cx / VOISIN_CELL), cj = Math.floor(cz / VOISIN_CELL);
+    let best: Voisin | undefined, bd = VOISIN_MAX * VOISIN_MAX;
+    for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) {
+      const l = this.connus.get(`${i},${j}`);
+      if (!l) continue;
+      for (const c of l) {
+        if (c.g !== gab) continue;
+        const d = (c.x - cx) * (c.x - cx) + (c.z - cz) * (c.z - cz);
+        if (d < bd) { bd = d; best = c.v; }
+      }
     }
-    if (b.l <= 2) return r < 0.7 ? 'pavillon' : 'faubourg';
-    if (b.l <= 5) return r < 0.5 ? 'faubourg' : r < 0.65 ? 'brique' : r < 0.82 ? 'contemporain' : 'moderne';
-    return r < 0.6 ? 'moderne' : 'contemporain';
+    return best;
   }
 
-  private building(b: RawBuilding, g: GeoBuilder, roofs: GeoBuilder) {
+  /**
+   * Verse un bâtiment dans les lots : murs dans `g`, toit dans `roofs`, enseignes et plaque dans le lot
+   * de textes de la dalle où elles se trouvent (`textes`). Pour la silhouette lointaine, `roofs` est le
+   * lot de façades lui-même et `roofLayer` la couche de la texture tableau à y mettre.
+   */
+  private building(b: RawBuilding, g: GeoBuilder, roofs: GeoBuilder, textes: (x: number, z: number) => GeoBuilder, roofLayer = 0) {
     const p = b.p, n = p.length / 2;
     const seed = hash32(`${p[0]}|${p[1]}|${n}`);
     const rng = new Rng(seed);
-    const style = this.pickStyle(b, rng);
-    const tint = lin(rng.pick(PALETTES[style]));
-    const roofTint = lin(rng.pick(ROOF_TINT[style]));
+    // sens de parcours → normale sortante
+    let area = 0, cx = 0, cz = 0;
+    for (let i = 0; i < n; i++) { const j = (i + 1) % n; area += p[i * 2] * p[j * 2 + 1] - p[j * 2] * p[i * 2 + 1]; cx += p[i * 2]; cz += p[i * 2 + 1]; }
+    cx /= n; cz /= n;
+    const sgn = area > 0 ? 1 : -1;
+    const look = apparence(b, Math.abs(area) / 2, rng.next(), this.voisin(b, cx, cz));
+    const style = look.style;
+    const tint = lin(hex(rng.pick(look.murs)));
+    const roofTint = lin(hex(rng.pick(look.toit)));
     const F = this.mats.facades;
     const top = KERB_H + b.h;
     const open = b.t === 'roof';
+    const lPlain = F.layer(style, 'plain');
 
     // toit
-    roofs.polygon(p, [], top, 1 / 3, 0, 0, 1, roofTint[0], roofTint[1], roofTint[2]);
-    if (open) { roofs.polygon(p, [], top - 0.25, 1 / 3, 0, 0, 1, roofTint[0] * 0.6, roofTint[1] * 0.6, roofTint[2] * 0.6); return; }
+    if (open) {
+      roofs.polygon(p, [], top, 1 / 3, 0, 0, 1, roofTint[0], roofTint[1], roofTint[2], roofLayer);
+      roofs.polygon(p, [], top - 0.25, 1 / 3, 0, 0, 1, roofTint[0] * 0.6, roofTint[1] * 0.6, roofTint[2] * 0.6, roofLayer);
+      return;
+    }
+    const pans = look.pente > 0 ? toitEnPente(p, look.pente, look.faitage, look.largeurMax, look.monument) : null;
+    if (pans) {
+      // la texture de couverture est sombre : sans ce coup de clair, la tuile en pente vire au brun
+      for (let i = 0; i < 3; i++) roofTint[i] *= 1.7;
+      // la hauteur de la carte est celle de l'égout : le faîtage monte au-dessus
+      const [ax, az] = pans.axe;
+      for (const f of pans.versants) {
+        const [nx, ny, nz] = faceNormal(f, 0, 1, 0);
+        const ids = f.map((q) => {
+          const u = (q[0] * ax + q[2] * az) / 2.4, v = (q[2] * ax - q[0] * az) / 2 + q[1] / 2;
+          return roofs.vertex(q[0], top + q[1], q[2], nx, ny, nz, u, v, roofTint[0], roofTint[1], roofTint[2], u, v, roofLayer);
+        });
+        face(roofs, ids, nx, ny, nz);
+      }
+      for (const f of pans.pignons) {
+        // le pignon regarde vers l'extérieur : à l'opposé du centre de l'emprise
+        const [nx, ny, nz] = faceNormal(f, f[0][0] - cx, 0, f[0][2] - cz);
+        const ids = f.map((q) => {
+          const u = (q[2] * ax - q[0] * az) / BAY_W, v = -q[1] / 3;
+          return g.vertex(q[0], top + q[1], q[2], nx, ny, nz, u, v, tint[0] * 0.95, tint[1] * 0.95, tint[2] * 0.95, u, v, lPlain);
+        });
+        face(g, ids, nx, ny, nz);
+      }
+      // sous-face : là où le toit déborde de l'emprise (décrochement, angle rentrant), on ferme le
+      // dessous à hauteur d'égout, sinon on voit le ciel entre les murs et les tuiles
+      if (pans.sousFace) {
+        const ids = pans.sousFace.map((q) => {
+          const u = q[0] / BAY_W, v = q[1] / 3;
+          return g.vertex(q[0], top, q[1], 0, -1, 0, u, v, tint[0] * 0.7, tint[1] * 0.7, tint[2] * 0.7, u, v, lPlain);
+        });
+        for (let i = 1; i + 1 < ids.length; i++) face(g, [ids[0], ids[i], ids[i + 1]], 0, -1, 0);
+      }
+    } else {
+      roofs.polygon(p, [], top, 1 / 3, 0, 0, 1, roofTint[0], roofTint[1], roofTint[2], roofLayer);
+    }
 
-    // sens de parcours → normale sortante
-    let area = 0;
-    for (let i = 0; i < n; i++) { const j = (i + 1) % n; area += p[i * 2] * p[j * 2 + 1] - p[j * 2] * p[i * 2 + 1]; }
-    const sgn = area > 0 ? 1 : -1;
-
-    const groundH = Math.min(b.h, style === 'pavillon' ? 2.9 : style === 'industriel' ? Math.min(b.h, 4.2) : 3.5);
-    const upperFloors = Math.max(0, b.l - 1);
-    const band = upperFloors > 0 ? Math.min(0.7, (b.h - groundH) * 0.12) : 0;
+    // rez-de-chaussée plus bas pour les maisons, plus haut pour les halls d'ateliers et de bureaux
+    const maison = style === 'pavillon' || (style === 'meuliere' && b.l <= 3);
+    const groundH = Math.min(b.h, maison ? 2.9 : style === 'industriel' || style === 'civique' ? 4.2 : style === 'verre' ? 4 : 3.5);
+    const et = etages(b.h, b.l, groundH, look.etage);
     const yG = KERB_H + groundH;
-    const yU = top - band;
+    const yU = yG + et.n * et.h;
     const upRole = rng.next() < 0.5 ? 'upperA' : 'upperB';
     const lUpper = F.layer(style, upRole), lUpper2 = F.layer(style, upRole === 'upperA' ? 'upperB' : 'upperA');
-    const lGround = F.layer(style, 'ground'), lDoor = F.layer(style, 'door'), lPlain = F.layer(style, 'plain');
-    const shopBuilding = b.t === 'res' && b.l >= 2 && style !== 'pavillon' && rng.next() < 0.8;
+    const lGround = F.layer(style, 'ground');
+    // garages et remises : la « porte » est la porte basculante du pavillon
+    const lDoor = look.aveugle && style === 'pavillon' ? lGround : F.layer(style, 'door');
+    // Commerces en pied d'immeuble : d'abord ceux de la carte, chacun sur son mur. Le tirage ne sert
+    // plus qu'à meubler les grands axes là où OpenStreetMap n'a rien : il est rare, et pèse selon
+    // l'usage relevé par l'IGN, pour ne pas inventer de boutiques sans nom à côté des vraies.
+    const dev = this.devantures.get(b);
+    const shopP = dev ? 0 : b.u === undefined ? 0.3 : b.u === 'c' || b.u2 === 'c' ? 0.5 : 0.1;
+    const shopOk = b.t === 'res' && b.l >= 2 && !look.aveugle && style !== 'pavillon' && style !== 'verre' && style !== 'industriel';
+    const shopBuilding = rng.next() < shopP && shopOk;
     const shopBase = rng.int(0, 5);
 
     // mur le plus long donnant sur une rue → porte d'entrée
-    interface Wall { i: number; len: number; facing: boolean; commercial: boolean; nx: number; nz: number; party: boolean }
+    interface Wall { i: number; len: number; facing: boolean; commercial: boolean; nx: number; nz: number; party: boolean; low: number }
     const wallsInfo: Wall[] = [];
     let doorWall = -1, doorLen = 0;
     for (let i = 0; i < n; i++) {
@@ -299,7 +424,8 @@ export class City {
       const x0 = p[i * 2], z0 = p[i * 2 + 1], x1 = p[j * 2], z1 = p[j * 2 + 1];
       const dx = x1 - x0, dz = z1 - z0, len = Math.hypot(dx, dz);
       const nx = (sgn * dz) / (len || 1), nz = (-sgn * dx) / (len || 1);
-      const party = this.shared.has(segKey(x0, z0, x1, z1));
+      const low = this.shared.get(segKey(x0, z0, x1, z1));
+      const party = low !== undefined;
       let facing = false, commercial = false;
       if (!party && len > 1.6) {
         const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
@@ -313,16 +439,50 @@ export class City {
         }
       }
       if (facing && len > doorLen) { doorLen = len; doorWall = i; }
-      wallsInfo.push({ i, len, facing, commercial, nx, nz, party });
+      wallsInfo.push({ i, len, facing, commercial, nx, nz, party, low: low ?? 0 });
+    }
+
+    // Mur de l'entrée, qui reçoit la porte, la plaque et le clocher ou le beffroi. Sur rue, c'est le
+    // plus long mur sur rue. Un édifice en retrait (mairie sur sa place, église sur son parvis) n'en
+    // a pas : on prend celui qui regarde la rue la plus proche. Pour un édifice public ou une église
+    // on ne se fie pas au seul mur sur rue, qui est souvent le pignon d'une aile : la façade d'honneur
+    // est dans l'axe du bâtiment, et elle donne sur une vraie rue plutôt que sur une venelle.
+    const plaque = b.n ? this.enseignes.get(cleRepere(b.n)) : undefined;
+    const edifice = b.t === 'pub' || b.t === 'church';
+    let entree = doorWall, recul = 0;
+    if ((plaque && entree < 0) || edifice) {
+      let mieux = Infinity;
+      for (const w of wallsInfo) {
+        if (w.party || w.len < 4) continue;
+        const j = (w.i + 1) % n;
+        const mx = (p[w.i * 2] + p[j * 2]) / 2, mz = (p[w.i * 2 + 1] + p[j * 2 + 1]) / 2;
+        const loc = this.net.locate(mx + w.nx * 3, mz + w.nz * 3);
+        if (!loc || loc.dist > 60) continue;
+        const pt = loc.edge.line.at(loc.s);
+        if ((pt.x - mx) * w.nx + (pt.z - mz) * w.nz <= 0) continue;
+        // à recul comparable, le mur le plus long : la façade principale plutôt qu'un retour
+        let note = loc.dist - Math.min(w.len, edifice ? 16 : 30) / 2;
+        if (edifice) {
+          // écart du milieu du mur à l'axe du bâtiment, de 0 (dans l'axe) à 1 (en bout d'aile)
+          const ux = -w.nz, uz = w.nx;
+          let lo = Infinity, hi = -Infinity;
+          for (let k = 0; k < n; k++) { const v = p[k * 2] * ux + p[k * 2 + 1] * uz; if (v < lo) lo = v; if (v > hi) hi = v; }
+          note += (30 * Math.abs(mx * ux + mz * uz - (lo + hi) / 2)) / Math.max(1, (hi - lo) / 2);
+          if (/^(living_street|pedestrian|service|footway)$/.test(loc.edge.cls)) note += 10;
+        }
+        if (note < mieux) { mieux = note; entree = w.i; recul = loc.dist; }
+      }
+      if (entree < 0) entree = doorWall;
     }
 
     for (const w of wallsInfo) {
       const i = w.i, j = (i + 1) % n;
       const x0 = p[i * 2], z0 = p[i * 2 + 1], x1 = p[j * 2], z1 = p[j * 2 + 1];
       if (w.len < 0.05) continue;
-      const blind = w.party || w.len < 1.7;
+      const pignon = w.party || w.len < 1.7;
+      const blind = pignon || (w.len < MUR_ETROIT && i !== entree && !dev?.some((d) => d.i === i));
       // teinte légèrement plus sombre pour les pignons aveugles et les façades sur cour
-      const k = blind ? 0.86 : w.facing ? 1 : 0.93;
+      const k = pignon ? 0.86 : w.facing ? 1 : 0.93;
       const r = tint[0] * k, gg = tint[1] * k, bb = tint[2] * k;
       const nb = Math.max(1, Math.round(w.len / BAY_W));
       const q = (xa: number, za: number, xb: number, zb: number, yb: number, yt: number, ua: number, ub: number, vt: number, vb: number, layer: number, s = 1) => {
@@ -332,34 +492,154 @@ export class City {
         const d = g.vertex(xa, yt, za, w.nx, 0, w.nz, ua, vt, r * s, gg * s, bb * s, ua, vt, layer);
         orient(g, a, b2, c, d, w.nx, 0, w.nz);
       };
+      const lay = (i % 3 === 2 && nb > 1) ? lUpper2 : lUpper;
       if (blind) {
+        // mitoyen nettement plus haut que son voisin (tour sur un socle, immeuble contre un pavillon) :
+        // les étages qui dépassent ont des fenêtres, calées sur les planchers du reste de l'immeuble
+        const k0 = w.party && et.n > 0 && w.len >= 1.7 && b.h > w.low + 5 ? Math.max(0, Math.ceil((KERB_H + w.low - yG) / et.h)) : et.n;
+        if (k0 < et.n && !look.aveugle) {
+          const yS = yG + k0 * et.h;
+          q(x0, z0, x1, z1, KERB_H, yS, w.len / BAY_W, 0, 0, (yS - KERB_H) / 3, lPlain);
+          q(x0, z0, x1, z1, yS, yU, nb, 0, 0, et.n - k0, lay);
+          if (et.bandeau > 0.05) q(x0, z0, x1, z1, yU, top, w.len / BAY_W, 0, 0, et.bandeau / 3, lPlain, 0.9);
+          continue;
+        }
         // mur aveugle : enduit uni sur toute la hauteur
         q(x0, z0, x1, z1, KERB_H, top, w.len / BAY_W, 0, 0, b.h / 3, lPlain);
         continue;
       }
       // rez-de-chaussée, travée par travée (u décroissant le long du mur : texture non inversée vue de la rue)
       const shop = shopBuilding && w.commercial;
-      const doorBay = i === doorWall ? Math.floor(nb / 2) : -1;
+      const doorBay = i === entree ? Math.floor(nb / 2) : -1;
+      // vrais commerces de ce mur : leurs travées prennent une vitrine, et leur nom le bandeau au-dessus
+      const ici = dev?.filter((d) => d.i === i);
+      const part = ici?.length ? partager(w.len, nb, ici) : null;
+      if (ici && part) {
+        // le bandeau recouvre celui de la tuile de vitrine : les 0,62 m du haut d'une tuile de 3 m
+        const hb = (0.62 * groundH) / 3;
+        const ux = (x1 - x0) / w.len, uz = (z1 - z0) / w.len;
+        ici.forEach((d, k) => {
+          const c = this.enseignes.get(d.cle);
+          const { a, b: fin } = part.bandeaux[k];
+          const larg = fin - a - 0.16;
+          if (!c || larg < 0.7) return;
+          const mx = x0 + ux * (a + fin) / 2, mz = z0 + uz * (a + fin) / 2;
+          poseBandeau(textes(mx, mz), c, mx, yG - hb / 2, mz, w.nx, w.nz, larg, Math.min(hb - 0.08, 0.56));
+        });
+      }
       for (let k2 = 0; k2 < nb; k2++) {
         const ta = k2 / nb, tb = (k2 + 1) / nb;
         let layer = lGround;
-        if (shop) layer = k2 === doorBay && nb > 2 ? lDoor : F.shop(shopBase + Math.floor(k2 / 2) + i);
+        const qui = part ? part.travees[k2] : -1;
+        if (qui >= 0) layer = F.shop(vitrine(ici![qui].t, ici![qui].graine));
+        else if (shop) layer = k2 === doorBay && nb > 2 ? lDoor : F.shop(shopBase + Math.floor(k2 / 2) + i);
         else if (k2 === doorBay) layer = lDoor;
+        else if (look.aveugle) layer = lPlain;
         else if (style === 'pavillon' && (k2 + seed) % 3 !== 0) layer = F.layer(style, 'upperA');
-        else if (!w.facing && style !== 'industriel') layer = (k2 + i) % 2 ? lGround : lPlain;
+        else if (!w.facing && style !== 'industriel' && style !== 'verre') layer = (k2 + i) % 2 ? lGround : lPlain;
         q(x0 + (x1 - x0) * ta, z0 + (z1 - z0) * ta, x0 + (x1 - x0) * tb, z0 + (z1 - z0) * tb, KERB_H, yG, 1, 0, 0, 1, layer);
       }
-      // étages
-      if (upperFloors > 0 && yU > yG + 0.5) {
-        const lay = (i % 3 === 2 && nb > 1) ? lUpper2 : lUpper;
-        q(x0, z0, x1, z1, yG, yU, nb, 0, 0, upperFloors, w.facing || nb > 1 ? lay : lPlain);
+      // étages : une tuile par étage, quelle que soit leur hauteur réelle
+      if (et.n > 0) {
+        q(x0, z0, x1, z1, yG, yU, nb, 0, 0, et.n, !look.aveugle && (w.facing || nb > 1) ? lay : lPlain);
         // bandeau de couronnement
-        if (band > 0.05) q(x0, z0, x1, z1, yU, top, w.len / BAY_W, 0, 0, band / 3, lPlain, 0.9);
+        if (et.bandeau > 0.05) q(x0, z0, x1, z1, yU, top, w.len / BAY_W, 0, 0, et.bandeau / 3, lPlain, 0.9);
       } else if (top > yG + 0.02) {
         q(x0, z0, x1, z1, yG, top, w.len / BAY_W, 0, 0, (top - yG) / 3, lPlain, 0.95);
       }
     }
+
+    // bâtiment nommé (mairie, église, théâtre, tour, résidence…) : son nom sur une plaque, au-dessus
+    // de l'entrée ; les lettres grandissent avec le recul pour rester lisibles depuis la chaussée
+    const w = entree >= 0 ? wallsInfo[entree] : null, j = (entree + 1) % n;
+    if (plaque && w && w.len > 3) {
+      const c = plaque;
+      const mx = (p[entree * 2] + p[j * 2]) / 2, mz = (p[entree * 2 + 1] + p[j * 2 + 1]) / 2;
+      const h = Math.min(0.6 + Math.min(recul, 36) / 40, Math.max(0.3, top - yG - 0.1), ((w.len - 0.8) / c.w) * c.h);
+      // sous les appuis de fenêtre du premier étage (à cheval sur le plancher quand la plaque est
+      // grande) ; sur un bâtiment sans étage, sous la corniche
+      const y = et.n > 0 ? yG + (h > 0.62 ? 0 : 0.08 + h / 2) : Math.max(KERB_H + h / 2 + 0.2, top - 0.15 - h / 2);
+      poseBandeau(textes(mx, mz), c, mx, y, mz, w.nx, w.nz, (c.w * h) / c.h, h);
+    }
+
+    // Clocher ou beffroi : une tour carrée derrière la façade d'entrée, dans les mêmes lots que le
+    // bâtiment (une vingtaine de triangles). C'est ce qui fait reconnaître l'église ou la mairie de
+    // loin, bien avant qu'on puisse lire la plaque.
+    if (look.tour && w && w.len >= 4) {
+      const clocher = look.tour === 'clocher';
+      const cote = Math.min(clocher ? 6.5 : 9, Math.max(clocher ? 4 : 6, Math.sqrt(Math.abs(area) / 2) * 0.2), w.len);
+      const mx = (p[entree * 2] + p[j * 2]) / 2, mz = (p[entree * 2 + 1] + p[j * 2 + 1]) / 2;
+      const ux = -w.nz, uz = w.nx, d = cote / 2;
+      const ox = mx - w.nx * (d + 0.4), oz = mz - w.nz * (d + 0.4);
+      // coins dans l'ordre : avant gauche, avant droit, arrière droit, arrière gauche
+      const coins: [number, number][] = [[-1, 1], [1, 1], [1, -1], [-1, -1]].map(([a, f]) => [ox + ux * d * a + w.nx * d * f, oz + uz * d * a + w.nz * d * f]);
+      // la tour doit tomber dans l'emprise : derrière une façade en biais ou trop mince, on s'en passe
+      if (coins.every(([x, z]) => dedans(p, ox + (x - ox) * 0.9, oz + (z - oz) * 0.9))) {
+        const fut = top + (pans?.faite ?? 0) + (clocher ? 2 : 5);
+        const chambre = fut + (clocher ? 4.5 : 4);
+        const lBaie = F.layer(style, 'upperA');
+        for (let k = 0; k < 4; k++) {
+          const [xa, za] = coins[k], [xb, zb] = coins[(k + 1) % 4];
+          const fnx = (xa + xb) / 2 - ox, fnz = (za + zb) / 2 - oz, fl = Math.hypot(fnx, fnz);
+          const nx = fnx / fl, nz = fnz / fl;
+          const pan = (yb: number, yt: number, u1: number, v1: number, layer: number) => {
+            const ids = [g.vertex(xa, yb, za, nx, 0, nz, u1, v1, tint[0], tint[1], tint[2], u1, v1, layer), g.vertex(xb, yb, zb, nx, 0, nz, 0, v1, tint[0], tint[1], tint[2], 0, v1, layer),
+              g.vertex(xb, yt, zb, nx, 0, nz, 0, 0, tint[0], tint[1], tint[2], 0, 0, layer), g.vertex(xa, yt, za, nx, 0, nz, u1, 0, tint[0], tint[1], tint[2], u1, 0, layer)];
+            face(g, ids, nx, 0, nz);
+          };
+          // fût nu, puis la chambre des cloches (ou la salle haute du beffroi) : une baie par face
+          pan(top, fut, cote / BAY_W, (fut - top) / 3, lPlain);
+          pan(fut, chambre, 1, 1, lBaie);
+          if (clocher) {
+            // flèche à quatre pans
+            const fl2 = cote * 1.3, sx = ox, sz = oz;
+            const q: V3[] = [[xa, chambre, za], [xb, chambre, zb], [sx, chambre + fl2, sz]];
+            const [tx, ty, tz] = faceNormal(q, nx, 0, nz);
+            const ids = q.map((v, m) => roofs.vertex(v[0], v[1], v[2], tx, ty, tz, m === 2 ? 0.5 : m, m === 2 ? 1 : 0, roofTint[0], roofTint[1], roofTint[2], m === 2 ? 0.5 : m, m === 2 ? 1 : 0, roofLayer));
+            face(roofs, ids, tx, ty, tz);
+          }
+        }
+        if (!clocher) {
+          // terrasse du beffroi
+          const ids = coins.map(([x, z]) => roofs.vertex(x, chambre, z, 0, 1, 0, x / 3, z / 3, roofTint[0], roofTint[1], roofTint[2], x / 3, z / 3, roofLayer));
+          face(roofs, ids, 0, 1, 0);
+        }
+      }
+    }
   }
+}
+
+/** Le point (x, z) est-il dans le polygone p (x0, z0, x1, z1…) ? Règle pair-impair. */
+function dedans(p: ArrayLike<number>, x: number, z: number): boolean {
+  let inside = false;
+  const n = p.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = p[i * 2], zi = p[i * 2 + 1], xj = p[j * 2], zj = p[j * 2 + 1];
+    if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+type V3 = readonly [number, number, number];
+/** Normale unitaire d'une face plane, retournée s'il le faut pour regarder vers (dx,dy,dz). */
+function faceNormal(f: readonly V3[], dx: number, dy: number, dz: number): [number, number, number] {
+  const a = f[0], b = f[1], c = f[2];
+  const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+  const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz) || 1;
+  nx /= l; ny /= l; nz /= l;
+  return nx * dx + ny * dy + nz * dz >= 0 ? [nx, ny, nz] : [-nx, -ny, -nz];
+}
+
+/** Indexe un triangle ou un quadrilatère de façon que sa face avant regarde vers (nx,ny,nz). */
+function face(g: GeoBuilder, ids: number[], nx: number, ny: number, nz: number) {
+  if (ids.length === 4) { orient(g, ids[0], ids[1], ids[2], ids[3], nx, ny, nz); return; }
+  const P = g.pos, [a, b, c] = ids;
+  const ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2];
+  const vx = P[c * 3] - P[a * 3], vy = P[c * 3 + 1] - P[a * 3 + 1], vz = P[c * 3 + 2] - P[a * 3 + 2];
+  const d = (uy * vz - uz * vy) * nx + (uz * vx - ux * vz) * ny + (ux * vy - uy * vx) * nz;
+  if (d >= 0) g.tri(a, b, c); else g.tri(a, c, b);
 }
 
 function segKey(x0: number, z0: number, x1: number, z1: number): string {
