@@ -10,9 +10,20 @@
 //  • HID++ 4.2, fonctionnalité 0x8123 (G920, G923 version Xbox/PC, 046d:c26e) : effet « constant »
 //    téléchargé (fonction 0x21) puis mis à jour en continu — relu dans hid-logitech-hidpp.c.
 // Seul un couple constant est envoyé : amortissement, frottements, butées et vibrations sont
-// calculés par le simulateur. N'a pas pu être essayé sur un volant réel depuis l'environnement de
-// développement, et aucun pilote n'indique de quel côté de 0x80 le volant part à droite : un test
-// (« le volant doit partir à droite ») et une option d'inversion sont prévus pour cela.
+// calculés par le simulateur.
+//
+// Sens de l'effort. Aucun pilote ne l'écrit en toutes lettres ; il se déduit de conventions documentées,
+// mises bout à bout :
+//  1. SDL (SDL_haptic.h) : une direction est « celle d'où vient la force », l'est valant (1,0) ;
+//  2. SDL pour Linux (SDL_syshaptic.c) traduit l'est, comme l'axe de direction d'un volant, par 0x4000 ;
+//  3. le noyau (ff-memless.c) calcule x = sin(direction) × niveau, soit +niveau pour 0x4000 ;
+//  4. hid-lg4ff.c envoie l'octet x + 0x80, et hid-logitech-hidpp.c la force signée telle quelle.
+// Un niveau positif — octet supérieur à 0x80, force HID++ positive — est donc une force venant de la
+// droite, qui pousse le volant vers la gauche ; pour pousser à droite on envoie un octet inférieur à
+// 0x80 (ou une force HID++ négative). C'est le sens retenu ici par défaut pour les deux protocoles.
+// Cette déduction n'a pas pu être confirmée sur un volant réel depuis l'environnement de développement
+// (le document du constructeur n'est plus en ligne) : le test « le volant doit partir à droite » et
+// l'option d'inversion restent là pour cela.
 
 import { clamp } from '../core/math';
 

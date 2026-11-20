@@ -35,9 +35,12 @@ Pour une version optimisée : `npm run build` puis `npm run preview`.
 > dont le code source a été relu ([new-lg4ff](https://github.com/berarma/new-lg4ff) pour le G923
 > PlayStation/PC, `hid-logitech-hidpp.c` pour le G923 Xbox — voir `tests/volant.test.ts`). Si le volant
 > est en mode PlayStation, le jeu demande le passage en mode natif : il se reconnecte, cliquez de
-> nouveau sur *Connecter le volant*. Reste à confirmer sur le matériel le **sens** de l'effort, qu'aucun
-> pilote n'indique (case « Inverser »), et le ressenti : commencez avec une force modérée. Sans retour
-> de force, le volant fonctionne avec le ressort de centrage de G HUB.
+> nouveau sur *Connecter le volant*. Le **sens** de l'effort retenu par défaut est celui que donnent,
+> mises bout à bout, les conventions de SDL, du noyau Linux et de ces pilotes (octet inférieur à 0x80 =
+> effort vers la droite ; détail en tête de `src/input/ffb.ts`) — aucun texte ne l'énonce directement
+> et il reste à confirmer sur le matériel, comme le ressenti : le bouton *Tester* et la case
+> « Inverser » servent à cela ; commencez avec une force modérée. Sans retour de force, le volant
+> fonctionne avec le ressort de centrage de G HUB.
 
 Sans volant, le jeu se pilote au clavier (AZERTY) ou à la manette — voir *Commandes et aide*.
 

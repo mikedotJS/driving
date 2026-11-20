@@ -49,11 +49,24 @@ avec un **G923 émulé** (`tests/volant.test.ts`, 10 tests) :
     remise à zéro (`11`), gains (`81`), effet constant à démarrage automatique téléchargé par la
     fonction `21`, force sur 16 bits aux octets 6 et 7 des paramètres.
 
-Ce qui reste invérifiable sans matériel : le **sens** de l'effort — aucun des deux pilotes n'indique de
-quel côté de la valeur neutre le volant part à droite. Le jeu n'a donc pas besoin de le savoir : après
-« Tester », il demande de quel côté le volant est parti et inverse le sens s'il le faut. Restent à
-constater sur le matériel l'acceptation par le navigateur du rapport `30` de changement de mode, et le
-ressenti.
+**Sens de l'effort.** Aucun des deux pilotes n'écrit de quel côté de la valeur neutre le volant part
+à droite, et le document de protocole du constructeur n'est plus en ligne (la copie archivée n'était
+pas joignable depuis l'environnement de développement). Le sens se déduit toutefois de conventions
+documentées, relues dans les sources le 20 novembre 2026 :
+
+1. SDL (`SDL_haptic.h`) : une direction est « celle d'où vient la force, et non celle dans laquelle
+   elle s'exerce » ; l'est vaut (1, 0) ;
+2. SDL pour Linux (`SDL_syshaptic.c`) traduit l'est — et l'axe de direction d'un volant — par `0x4000` ;
+3. le noyau (`ff-memless.c`) calcule `x = sin(direction) × niveau`, soit `+niveau` pour `0x4000` ;
+4. `hid-lg4ff.c` envoie l'octet `x + 0x80` ; `hid-logitech-hidpp.c` envoie la force signée telle quelle.
+
+Un niveau positif (octet supérieur à `80`, force HID++ positive) est donc une force venant de la
+droite, qui pousse le volant vers la gauche ; pour pousser à droite, le jeu envoie un octet inférieur
+à `80` ou une force HID++ négative. C'est son réglage par défaut pour les deux versions du G923.
+
+**Ce qui reste invérifiable sans matériel** : que le volant suive bien cette convention (d'où le
+bouton « Tester », qui demande de quel côté il est parti et inverse le sens s'il le faut),
+l'acceptation par le navigateur du rapport `30` de changement de mode, et le ressenti.
 
 ## 3. Le Code de la route
 
