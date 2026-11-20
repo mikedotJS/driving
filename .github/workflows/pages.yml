@@ -2,9 +2,11 @@
 # Préalable, une seule fois : Settings → Pages → Source : « GitHub Actions ».
 name: Publication sur GitHub Pages
 
+# (Pages n'accepte par défaut que la branche par défaut du dépôt : tant que ce n'est pas main, la branche
+# de travail publie aussi.)
 on:
   push:
-    branches: [main]
+    branches: [main, claude/wonderful-gauss-5q6kz3]
   workflow_dispatch:
 
 permissions:
