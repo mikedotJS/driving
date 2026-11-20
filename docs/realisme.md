@@ -70,20 +70,49 @@ circulation, avec la vraie physique ; le moniteur ne doit rien lui reprocher de 
 | Essai | Résultat |
 |---|---|
 | `npm test` : 5 leçons (feux, priorité, tournants, giratoire, grands axes) | 5 sur 5 sans faute grave ni accrochage |
-| `npm run test:endurance` : 48 trajets (6 thèmes × 8 tirages) | 48 terminés, 48 sans faute grave ni accrochage, aucun contact avec une bordure ; même résultat sur 48 autres trajets tirés avec des graines jamais utilisées pendant la mise au point (`BASE=500`) |
-| Circulation seule, 45 véhicules autour de la Croix de Chavaux pendant 6 min, 8 tirages | aucun véhicule immobilisé plus de 40 s en fin d'essai ; 1 à 35 chevauchements instantanés entre voitures selon le tirage (2 sur le tirage de référence, arrêt le plus long 52 s) |
+| `npm run test:endurance` : 48 trajets (6 thèmes × 8 tirages), départ choisi comme dans le jeu | 48 sur 48 sans faute grave ni accrochage. Six séries de 48 ont été parcourues (`BASE=101`, `500`, `900`, `1300`, `1700`, `2100`) : 288 trajets sur 288. Les trois premières ont servi à la mise au point ; les trois dernières n'ont été lancées qu'une fois, à la fin, sur des tirages jamais vus : 144 sur 144 |
+| Circulation seule autour de la Croix de Chavaux pendant 6 min, 12 tirages, à la densité du jeu (28 véhicules) | aucun chevauchement de carrosseries entre véhicules, sur les 12 tirages ; immobilisation la plus longue : 72 s (un véhicule qui laisse passer un cycle de feu) |
+| Même essai à densité forcée (45 véhicules) | 1 chevauchement instantané au total sur les 12 tirages ; immobilisation la plus longue : 44 s |
+| `node tools/essais/navigateur.cjs` : six leçons guidées ouvertes par le menu dans la version compilée du jeu, démonstration du moniteur, 4 à 7 min simulées chacune | aucune erreur JavaScript, aucune faute, aucun choc, aucun chevauchement ; jusqu'à 30 véhicules et 8 réservations simultanées ; 1,1 à 1,9 km parcourus par leçon (4 arrivées, 2 encore en route à la fin du temps imparti) |
+
+**Ce que ces chiffres ne disent pas.** Les trajets sont ceux d'un conducteur automatique, pas d'un
+élève : ils garantissent qu'une conduite correcte n'est pas sanctionnée et que la circulation ne se
+noue pas, non que tout comportement d'élève sera jugé comme le ferait un inspecteur. Jusqu'à cette
+version, les essais partaient toujours de la première rue de départ de chaque thème alors que le jeu
+en change selon le tirage : les aligner a révélé plusieurs défauts réels, corrigés ci-dessous.
 
 Ces essais ont fait corriger plusieurs **fausses fautes** : refus de priorité signalé à une voiture
 arrêtée à sa ligne de stop, sens interdit dans une rue à sens unique tracée à l'envers, clignotant
 exigé avant un carrefour impossible à anticiper, ligne de stop placée 11 m trop tôt, ligne de feu
-décalée de plusieurs mètres dans les rues courbes, autobus qui balayait la voie voisine en tournant.
-Les itinéraires de leçon ne sont retenus que si chaque virage est praticable sans toucher une bordure.
+décalée de plusieurs mètres dans les rues courbes, autobus qui balayait la voie voisine en tournant,
+voiture située par erreur sur la chaussée voisine à contresens dans une grande place (faux « sens
+interdit », faux « départ du stationnement »).
+Les itinéraires de leçon ne sont retenus que si chaque virage est praticable sans toucher une bordure,
+un mur ou une façade ; à défaut, la leçon part de la rue du thème dont le parcours est le plus net.
 
-Garde-fous contre les embouteillages : on n'entre pas dans un carrefour complexe déjà encombré ; entre
-usagers à l'arrêt qui se cèdent mutuellement le passage, celui qui attend depuis le plus longtemps
-passe ; une voiture qui barre la route du joueur à l'arrêt s'écarte ou recule ; en dernier recours
-(30 s de blocage complet près du joueur, ou 75 s d'immobilisation à plus de 45 m de lui), le véhicule
-est retiré de la circulation.
+Ils ont aussi fait corriger des **défauts de la circulation** : véhicule affiché en travers pendant
+une image sur une liaison de longueur nulle (il pouvait pousser la voiture de l'élève sur le
+trottoir), véhicules et cyclistes qui sous-estimaient l'encombrement d'une voiture de biais et en
+frôlaient l'angle, piéton qui descendait du trottoir au passage d'une voiture en train de tourner,
+véhicule entré dans une voie sans issue qui retenait toute la file derrière lui.
+
+**Grandes places (Croix de Chavaux, porte de Bagnolet, porte de Montreuil).** Leurs carrefours sont
+reliés par des voies de quelques mètres, où un véhicule ne tient pas sans déborder sur le carrefour
+précédent. La circulation les traverse donc comme un seul carrefour : avant d'y entrer, chaque véhicule
+réserve tout son trajet jusqu'à la sortie, ainsi que sa place à la sortie (R415-2 : on ne s'engage pas
+si l'on risque de rester immobilisé). Deux trajets qui se croisent, se frôlent ou se rejoignent ne
+sont jamais réservés en même temps ; entre deux entrées concurrentes, celui qui attend depuis le plus
+longtemps passe d'abord, sauf priorité contraire. C'est ce qui a fait disparaître les chevauchements
+de carrosseries (jusqu'à 200 instants par essai sur certains tirages avant cette version).
+
+**Égards envers l'élève.** Les autres véhicules le laissent s'insérer quand deux files se rejoignent
+en une seule ou qu'il met son clignotant vers leur voie ; nez à nez au milieu d'un carrefour, le
+véhicule recule de quelques mètres ; un cycliste attend quand la voiture va couper sa traversée.
+
+Derniers garde-fous contre les embouteillages : entre usagers à l'arrêt qui se cèdent mutuellement le
+passage, celui qui attend depuis le plus longtemps passe ; la circulation n'entre pas dans les voies
+sans issue ; en dernier recours (30 s de blocage complet près du joueur, ou 75 s d'immobilisation à
+plus de 45 m de lui), le véhicule est retiré de la circulation.
 
 ## 5. Charge de rendu
 

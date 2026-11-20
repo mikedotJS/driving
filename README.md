@@ -96,8 +96,11 @@ l'anneau dans les giratoires, arrêt devant les piétons. Un **conducteur automa
 démonstration) sert aussi de banc d'essai : `npm test` lui fait parcourir cinq leçons dans la
 circulation et exige qu'il arrive au bout sans aucune faute grave ni accrochage — c'est ce qui limite
 les fausses fautes signalées à un élève qui conduit bien. Le balayage plus large (`npm run test:endurance`,
-48 trajets) est entièrement propre : aucune faute grave, aucun accrochage, aucune bordure touchée —
-y compris sur 48 autres trajets tirés avec des graines jamais utilisées pendant la mise au point. Les mesures (physique comparée à une
+48 trajets par série, départ choisi comme dans le jeu) a été parcouru sur six séries : 288 trajets sur
+288 sans faute grave ni accrochage, dont 144 tirés une seule fois, à la fin, avec des graines jamais
+utilisées pendant la mise au point (`BASE=1300 npm run test:endurance` pour en rejouer une). Dans les
+grandes places comme la Croix de Chavaux, chaque véhicule réserve son trajet avant d'entrer : plus de
+carrosseries qui se chevauchent à la densité du jeu. Les mesures (physique comparée à une
 citadine réelle, volant émulé, charge de rendu, captures) sont dans [`docs/realisme.md`](docs/realisme.md).
 
 ## Le décor
@@ -130,7 +133,8 @@ src/
   audio/            son moteur synthétisé, voix du moniteur
   game/, ui/        leçons, examen, démonstration (pilote automatique), réglages, écrans
 tests/            tests (physique et réalisme, volant émulé, barème, réseau, circulation, règles, pilote automatique)
-tools/essais/     diagnostics : trace d'un trajet, chevauchements, plan de dessus d'un carrefour, balayage
+tools/essais/     diagnostics : trace d'un trajet, chevauchements, plan de dessus d'un carrefour, balayage,
+                  contrôle des leçons dans le navigateur
 tools/voix/       répliques du moniteur : textes, lots, découpage des enregistrements
 dev/              pages de mise au point de modules isolés
 ```
