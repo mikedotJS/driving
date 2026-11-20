@@ -454,6 +454,7 @@ export class Game implements MenuHost {
     }
     if (!route) { this.hud.coach('Impossible de préparer une démonstration ici.', '', false, 3); return; }
     const ap = new Autopilot(this.net, this.traffic, route);
+    ap.fitToRoad((x, z) => this.ground.isRoad(x, z), c.spec.wheelbase, c.spec.trackRear / 2);
     if (!ap.segs.length) { this.hud.coach('Impossible de préparer une démonstration ici.', '', false, 3); return; }
     // le moniteur s'installe : ceinture, moteur, boîte automatique
     if (!c.engineRunning) { c.mode = 'auto'; c.selector = 'P'; c.startEngine({ steer: 0, throttle: 0, brake: 1, clutch: 1, handbrake: 1 }); c.engineRunning = true; }
@@ -502,7 +503,11 @@ export class Game implements MenuHost {
       this.endDemo('Démonstration terminée. À vous de jouer !');
       return { ...input, throttle: 0, brake: 0.6, pressed: new Set(), held: new Set() };
     }
-    return { ...input, steer: this.demoSteer, throttle: cmd.throttle, brake: cmd.brake, clutch: 0, pressed: new Set(), held: new Set(), hGear: null, steerRate: 0 };
+    // marche arrière (pour dégager un carrefour) ou retour en marche avant : à l'arrêt seulement
+    const c = P.car, want = cmd.reverse ? 'R' : 'D';
+    let throttle = cmd.throttle, brake = cmd.brake;
+    if (c.selector !== want) { if (Math.abs(c.vx) < 0.25) c.selector = want; else { throttle = 0; brake = 0.6; } }
+    return { ...input, steer: this.demoSteer, throttle, brake, clutch: 0, pressed: new Set(), held: new Set(), hGear: null, steerRate: 0 };
   }
 
   private say(text: string, key: string | null = null, sub = '') {

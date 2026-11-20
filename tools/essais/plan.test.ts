@@ -19,6 +19,7 @@ it('plan', () => {
   const pose = START_STREETS[theme].map((n) => startOnStreet(net, n, 0.25)).find(Boolean)!;
   const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed)!;
   const ap = new Autopilot(net, null, route);
+  if (!process.env.SANS_AJUSTEMENT) ap.fitToRoad((x, z) => ground.isRoad(x, z));
   const A = ap as any;
   // on démarre un peu avant le segment visé
   const first = Math.max(0, target - 1);

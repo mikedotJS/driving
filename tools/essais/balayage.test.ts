@@ -9,8 +9,9 @@ it('balayage', () => {
   const lines: string[] = [];
   for (const th of themes) for (let k = 0; k < n; k++) {
     const seed = 101 + k * 17;
+    const limit = +(process.env.DUREE ?? 900);
     let r;
-    try { r = autoDrive(th as any, seed); } catch (e) { lines.push(`${th} ${seed} : erreur ${(e as Error).message}`); total++; continue; }
+    try { r = autoDrive(th as any, seed, 28, limit); } catch (e) { lines.push(`${th} ${seed} : erreur ${(e as Error).message}`); total++; continue; }
     total++;
     const good = r.done && r.graves === 0 && !r.collisions.length;
     if (good) ok++;

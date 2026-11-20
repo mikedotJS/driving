@@ -17,9 +17,11 @@ it('recouvrements', () => {
   const seen = new Map<string, number>();
   const kinds = new Map<string, number>();
   let n = 0;
+  const stuck = new Map<number, number>();
   for (let t = 0; t < 360; t += dt) {
     tr.update(dt, player);
     if (Math.round(t / dt) % 15 !== 0) continue;
+    for (const v of tr.vehicles) stuck.set(v.id, v.v < 0.1 ? (stuck.get(v.id) ?? 0) + 0.5 : 0);
     for (let i = 0; i < tr.vehicles.length; i++) for (let j = i + 1; j < tr.vehicles.length; j++) {
       const a = tr.vehicles[i], b = tr.vehicles[j];
       if (Math.hypot(a.x - b.x, a.z - b.z) >= 1.6) continue;
@@ -34,4 +36,34 @@ it('recouvrements', () => {
     }
   }
   console.log('échantillons', n, 'incidents', seen.size, Object.fromEntries(kinds));
+  // véhicules immobilisés depuis longtemps en fin d'essai, et ce qui les retient
+  const T = tr as any;
+  const watch = (process.env.VEH ?? '').split(',');
+  for (const o of tr.vehicles) {
+    if ((stuck.get(o.id) ?? 0) < 40 && !watch.includes(String(o.id))) continue;
+    const why: string[] = [];
+    if (o.lane && o.next) {
+      const end = o.lane.endRef, link = o.next;
+      for (const q of T.byLink.get(link) ?? []) why.push(`sur ma liaison : ${q.id} s=${q.s.toFixed(1)} v=${q.v.toFixed(1)}`);
+      for (const q of T.byLane.get(link.to) ?? []) why.push(`voie d'arrivée ${link.to.edge.name} (liaison ${link.line.length.toFixed(1)} m) : ${q.id} s=${q.s.toFixed(1)} v=${q.v.toFixed(1)}`);
+      why.push(`ctl=${end.control}${end.controller ? ':' + end.controller.state(end.group, tr.time) : ''} attente=${o.waiting.toFixed(0)} filet=${o.netWait.toFixed(0)}`);
+      for (const q of T.byLane.get(link.to) ?? []) if (q.s - q.length < o.length + 2 && q.v < 1.5) why.push(`sortie encombrée par ${q.id}`);
+      for (const c of link.conflicts) for (const q of T.byLink.get(c) ?? []) why.push(`dans le carrefour : ${q.id} v=${q.v.toFixed(1)}`);
+      for (const sp of o.lane.stops) if (sp.crossing && T.pedestrianOn(sp.crossing, o)) why.push(`piéton au passage s=${sp.s.toFixed(1)}`);
+      why.push(`a=${o.a.toFixed(2)} arrêts=[${o.lane.stops.map((sp: any) => `${sp.kind}@${sp.s.toFixed(1)}${sp.controller ? ':' + sp.controller.state(sp.group ?? 0, tr.time) : ''}`).join(' ')}] liaison=${link.turn}→${link.to.edge.name} long=${link.line.length.toFixed(1)} sortiesPiétons=${link.exitCrossings.length} cédez=${T.mustYield(o, link, end, 0, null)}`);
+      for (const x of link.exitCrossings) if (T.pedestrianOn(x.crossing, o)) why.push('piéton en sortie');
+      for (const c of link.conflicts) for (const q of T.byLane.get(c.from) ?? []) if (q.next === c) {
+        const od = q.lane.line.length - q.s;
+        if ((od < 9 || od / Math.max(2, q.v) < 3.6) && tr.hasPriorityOver(c.from.endRef, c, end, link, -end.dx, -end.dz)) why.push(`prioritaire en approche : ${q.id} depuis ${c.from.edge.name} à ${od.toFixed(1)} m v=${q.v.toFixed(1)} attente=${q.waiting.toFixed(0)} ctl=${c.from.endRef.control}${c.from.endRef.controller ? ':' + c.from.endRef.controller.state(c.from.endRef.group, tr.time) : ''}`);
+      }
+    } else if (o.link) {
+      why.push(`filet=${o.netWait.toFixed(0)}`);
+      for (const x of o.link.exitCrossings) if (T.pedestrianOn(x.crossing, o)) why.push('piéton en sortie');
+      for (const q of T.byLane.get(o.link.to) ?? []) why.push(`voie d'arrivée : ${q.id} s=${q.s.toFixed(1)} v=${q.v.toFixed(1)}`);
+    } else why.push('sans suite (impasse)');
+    for (const q of tr.vehicles) if (q !== o && Math.hypot(q.x - o.x, q.z - o.z) < 14 && T.bodyGap(o, q) < Infinity) why.push(`carrosserie de ${q.id} à ${T.bodyGap(o, q).toFixed(1)} m`);
+    const pg = T.playerGap(o, player);
+    if (pg < Infinity) why.push(`JOUEUR sur la trajectoire à ${pg.toFixed(1)} m`);
+    console.log(`BLOQUÉ ${(stuck.get(o.id) ?? 0).toFixed(0)} s : ${o.id} ${el(o)} | ${why.join(' | ')}`);
+  }
 });

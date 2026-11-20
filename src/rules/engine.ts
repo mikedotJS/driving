@@ -1,5 +1,6 @@
 // Moteur de règles : observe la conduite du joueur et relève les manquements au Code de la route.
 
+import type { Polyline } from '../map/polyline';
 import type { Car } from '../vehicle/car';
 import type { Crossing, Edge, EdgeEnd, Located, RoadNet, SignalController, Strip, Vertex } from '../map/roadnet';
 import type { Traffic, Vehicle, Pedestrian, PlayerInfo } from '../traffic/traffic';
@@ -416,7 +417,10 @@ export class RulesEngine {
       for (const o of en.candidates) {
         if (!o.alive) continue;
         const d = Math.hypot(o.x - car.x, o.z - car.z);
-        if (o.forcedByPlayer > 0.2 || (d < 9 && o.v > 1.5 && this.closing(car, o))) {
+        // il faut s'être réellement engagé : une voiture immobilisée à la ligne, devant laquelle passe
+        // un usager prioritaire, respecte la priorité
+        const engaged = this.engaged(car, en.end);
+        if (engaged && (o.forcedByPlayer > 0.2 || (d < 9 && o.v > 1.5 && this.closing(car, o)))) {
           en.reported = true;
           this.reportPriority(car, en.end);
           break;
@@ -471,14 +475,23 @@ export class RulesEngine {
 
   /** Le joueur se trouve-t-il dans le couloir de `o`, juste devant lui ? (il lui coupe la route) */
   private closing(car: Car, o: Vehicle): boolean {
-    const rx = car.x - o.x, rz = car.z - o.z;
-    const fx = Math.sin(o.heading), fz = -Math.cos(o.heading);
-    const ahead = rx * fx + rz * fz;
-    const lat = Math.abs(rx * -fz + rz * fx);
-    // demi-largeur du joueur vue depuis l'axe de l'autre véhicule (il peut être en travers)
-    const cross = Math.abs(car.forwardX * fx + car.forwardZ * fz);
-    const half = car.spec.width / 2 + (car.spec.length / 2 - car.spec.width / 2) * (1 - cross);
-    return ahead > 0 && ahead < o.length / 2 + 7 && lat < o.width / 2 + half + 0.2;
+    // on suit la trajectoire réelle de l'autre véhicule (liaison puis voie suivante), pas son cap
+    // instantané : en plein virage, son capot pointe vers des usagers qu'il ne va pas croiser
+    const test = (line: Polyline, sFrom: number, offset: number): boolean => {
+      if (car.x < line.minX - 5 || car.x > line.maxX + 5 || car.z < line.minZ - 5 || car.z > line.maxZ + 5) return false;
+      const pr = line.project(car.x, car.z);
+      if (pr.s >= line.length - 0.01 && offset === 0) return false; // au-delà de cet élément : voir le suivant
+      const along = offset + pr.s - sFrom;
+      // demi-largeur du joueur vue depuis l'axe de la trajectoire (il peut être en travers)
+      const cross = Math.abs(car.forwardX * pr.tx + car.forwardZ * pr.tz);
+      const half = car.spec.width / 2 + (car.spec.length / 2 - car.spec.width / 2) * (1 - cross);
+      return along > 0 && along < 7 && Math.abs(pr.d) < o.width / 2 + half + 0.2;
+    };
+    const L = o.path, rem = L.length - o.s;
+    if (test(L, o.s, 0)) return true;
+    if (o.link) return test(o.link.to.line, 0, rem);
+    if (o.next) return test(o.next.line, 0, rem);
+    return false;
   }
 
   /** Le véhicule `o` est-il prioritaire sur le joueur arrivant par `end` ? */
@@ -502,6 +515,14 @@ export class RulesEngine {
     return cross < -0.35;
   }
 
+  /** Le joueur est-il engagé dans le carrefour (en mouvement, ou l'avant nettement au-delà de l'embouchure) ? */
+  private engaged(car: Car, end: EdgeEnd): boolean {
+    if (car.vx > 0.4) return true;
+    const s = this.situation;
+    if (!s.edge || s.edge !== end.edge) return true;
+    return s.sFront > s.edge.length - end.trim + 0.8;
+  }
+
   private reportPriority(car: Car, end: EdgeEnd) {
     if (end.vertex.roundabout && !end.edge.roundabout) this.report('giratoire', car);
     else if (end.control === 'stop' || end.control === 'yield') this.report('cedez', car);
@@ -516,6 +537,8 @@ export class RulesEngine {
     if (this.entry && this.entry.reported) return;
     const here = o.link ? o.link.vertex === end.vertex : o.lane?.to === end.vertex;
     if (!here || !this.priorityOverPlayer(o, end)) return;
+    // un véhicule qui pile devant une voiture immobilisée à sa ligne n'a pas été gêné par elle
+    if (this.lastCar && !this.engaged(this.lastCar, end)) return;
     if (this.entry) this.entry.reported = true;
     // la voiture du joueur n'est pas connue ici : on la retrouve via la dernière situation
     if (this.lastCar) this.reportPriority(this.lastCar, end);

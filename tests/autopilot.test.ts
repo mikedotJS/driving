@@ -21,6 +21,7 @@ export function autoDrive(theme: Theme, seed: number, vehicles = 28, maxTime = 6
   const rules = new RulesEngine(net, traffic);
   const player = new Player(ground, net, traffic);
   const ap = new Autopilot(net, traffic, route);
+  if (!process.env.SANS_AJUSTEMENT) ap.fitToRoad((x, z) => ground.isRoad(x, z));
   // départ sur la voie
   const l0 = ap.segs[0].lane!;
   const s0 = l0.fromEdgeS(pose.s);
@@ -42,6 +43,9 @@ export function autoDrive(theme: Theme, seed: number, vehicles = 28, maxTime = 6
     // volant tourné à vitesse humaine
     steer += Math.max(-2.2 * dt, Math.min(2.2 * dt, cmd.steer - steer));
     input.steer = steer; input.throttle = cmd.throttle; input.brake = cmd.brake;
+    // marche arrière (ou retour en marche avant) : à l'arrêt seulement
+    const want = cmd.reverse ? 'R' : 'D';
+    if (player.car.selector !== want) { if (Math.abs(player.car.vx) < 0.25) player.car.selector = want; else { input.throttle = 0; input.brake = 0.6; } }
     if (cmd.indicator !== player.indicator && cmd.indicator !== 0) player.setIndicator(cmd.indicator);
     // manœuvre terminée et rappel automatique non déclenché : on coupe le clignotant à la main
     indOff = cmd.indicator === 0 && player.indicator !== 0 ? indOff + dt : 0;

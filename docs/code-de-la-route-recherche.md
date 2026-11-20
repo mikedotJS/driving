@@ -505,3 +505,81 @@ Widths and transverse marks:
 12. **CPF funding of the permis B in 2026** and any change to the probationary period (commercial sources only).
 
 To close these gaps, allow `www.legifrance.gouv.fr`, `www.service-public.gouv.fr`, `www.securite-routiere.gouv.fr`, `www.paris.fr`, `cdn.paris.fr`, `www.montreuil.fr`, `equipementsdelaroute.cerema.fr` in the session's network settings and re-run the check on items 1–11.
+
+
+## 7. Vérification sur les pages officielles (20 novembre 2026)
+
+Seconde passe, faite une fois `www.service-public.gouv.fr` joignable depuis l'environnement de
+développement. Les pages service-public ont été **téléchargées et lues en entier** ; Légifrance,
+le site du ministère de l'Intérieur et celui de la Sécurité routière refusent toujours les accès
+automatisés (réponse 403), si bien que le texte des articles n'a été vu qu'à travers les extraits
+affichés par les moteurs de recherche.
+
+**Résultat : aucune ligne du catalogue du jeu (`src/rules/infractions.ts`) n'a dû être corrigée.**
+18 lignes sur 31 sont confirmées sur une page officielle lue directement ; les 13 autres reposent
+en tout ou partie sur un extrait de Légifrance. Le test `tests/bareme.test.ts` fige ces valeurs.
+
+Pages lues directement :
+
+| Clé | Page | Dernière vérification affichée |
+|---|---|---|
+| SP-vitesse | https://www.service-public.gouv.fr/particuliers/vosdroits/F19460 | 29 décembre 2025 |
+| SP-points | https://www.service-public.gouv.fr/particuliers/vosdroits/F31551 | 27 février 2026 |
+| SP-amendes | https://www.service-public.gouv.fr/particuliers/vosdroits/F18509 (2ᵉ classe = 35 €, 4ᵉ classe = 135 €) | 20 novembre 2026 |
+| SP-délit | https://www.service-public.gouv.fr/particuliers/actualites/A18723 | — |
+| SP-voie | https://www.service-public.gouv.fr/particuliers/actualites/A18035 | — |
+| SP-klaxon | https://www.service-public.gouv.fr/particuliers/vosdroits/F35343 | — |
+| SP-stationnement | https://www.service-public.gouv.fr/particuliers/vosdroits/F34212 | — |
+| SP-ceinture | https://www.service-public.gouv.fr/particuliers/vosdroits/F628 | 2 novembre 2026 |
+| SP-examen | https://www.service-public.gouv.fr/particuliers/vosdroits/F2828 | — |
+
+| Infraction du jeu | Valeur | Confirmée par |
+|---|---|---|
+| Excès < 5 km/h (limite ≤ 50) | 4ᵉ classe, 135 €, 0 point | SP-vitesse, SP-points |
+| Excès de 5 à 19 km/h | 135 €, 1 point | SP-vitesse, SP-points |
+| Excès de 20 à 29 km/h | 135 €, 2 points | SP-vitesse, SP-points |
+| Excès de 30 à 39 km/h | 135 €, 3 points, suspension possible | SP-vitesse, SP-points |
+| Excès de 40 à 49 km/h | 135 €, 4 points, suspension possible | SP-vitesse, SP-points |
+| Excès ≥ 50 km/h | délit, amende forfaitaire délictuelle 300 € (250 € / 600 €), 6 points | SP-délit, SP-vitesse, SP-points |
+| Vitesse inadaptée, défaut de maîtrise (R413-17) | 4ᵉ classe, 135 € | SP-vitesse ; 0 point déduit de l'absence de mention |
+| Vitesse anormalement réduite (R413-19) | 2ᵉ classe, 35 € | SP-vitesse |
+| Feu rouge (R412-30) | 4ᵉ classe, 4 points | SP-points |
+| Feu orange (R412-31) | 2ᵉ classe | extrait Légifrance seulement |
+| Stop (R415-6), cédez-le-passage (R415-7) | 4ᵉ classe, 4 points | SP-points |
+| Refus de priorité (R415-5, R415-10, R415-4) | 4ᵉ classe, 4 points | SP-points (ligne générique) + extraits |
+| Refus de priorité à un piéton (R415-11) | 4ᵉ classe, **6 points** | SP-points |
+| Carrefour encombré (R415-2, 1ᵉʳ alinéa) | 4ᵉ classe, 135 €, 0 point | extrait Légifrance + source secondaire |
+| Sens interdit (R412-28) | 4ᵉ classe, 4 points | SP-points |
+| Circulation à gauche (R412-9) | 4ᵉ classe, 3 points | SP-points |
+| Franchissement de ligne continue (R412-19) | 4ᵉ classe, 3 points (chevauchement : 1) | SP-points |
+| Voie réservée (R412-7) | 135 € | SP-voie |
+| Bande cyclable, trottoir (R412-7) | 4ᵉ classe | extrait Légifrance seulement |
+| Clignotant (R412-10) | 2ᵉ classe, 3 points | SP-points |
+| Avertisseur en ville (R416-1) | 35 € | SP-klaxon |
+| Distance de sécurité (R412-12) | 4ᵉ classe, 3 points | SP-points |
+| Dépassement d'un cycliste (R414-4) | 1 m en ville, 1,50 m hors agglomération ; 4ᵉ classe, 3 points | extrait Légifrance ; SP-points (« dépassement dangereux ») |
+| Arrêt sur un passage piéton (R417-11) | « très gênant », 4ᵉ classe, 135 €, 0 point | SP-stationnement |
+| Ceinture (R412-1) | 135 €, 3 points | SP-ceinture, SP-points |
+| Circulation sans éclairage (R416-11) | 4ᵉ classe, 4 points | extrait Légifrance seulement ; le texte vise un lieu **dépourvu d'éclairage public** — le cas d'une rue éclairée n'a pas pu être vérifié |
+
+Dates et textes :
+
+- **Moins de 5 km/h, plus de retrait de point** : décret n° 2023-1150 du 6 décembre 2023, en
+  vigueur le 1ᵉʳ janvier 2024 (confirmé sur SP-vitesse et SP-points).
+- **Grand excès de vitesse = délit** : loi n° 2025-622 du 9 juillet 2025 et décret n° 2025-1269
+  du 22 décembre 2025 ; SP-délit indique « depuis le 29 décembre 2025 » (un extrait de Légifrance
+  date la version de l'article L413-1 du 31 décembre 2025 : écart de deux jours non tranché).
+- **Piéton : 6 points** depuis le décret n° 2018-795 du 17 septembre 2018.
+- **Examen** : SP-examen confirme « 20 points ou plus et ne pas commettre d'erreur éliminatoire » et
+  une épreuve de 32 minutes ; le total de 31 points n'apparaît que dans des sources secondaires.
+
+Nouveautés de 2026 relevées sur service-public (aucune ne modifie une amende, une classe ou un
+nombre de points du catalogue) : loi n° 2026-798 du 18 août 2026 dite « Ripost » (rétention et
+suspension du permis après usage de substances psychoactives, location de véhicules puissants
+interdite aux permis probatoires — textes d'application attendus) ; instruction ministérielle du
+29 septembre 2026 demandant aux préfets de suspendre le permis pour téléphone tenu en main (amende
+et points inchangés : 135 € / 3 points) ; financement du permis par le CPF restreint depuis le
+21 février 2026.
+
+Ce qui reste à faire vérifier par un humain sur Légifrance : les lignes marquées « extrait
+seulement » ci-dessus, et les points 3 à 11 de la section 6.

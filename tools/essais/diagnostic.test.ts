@@ -23,6 +23,7 @@ it('diagnostic', () => {
   const rules = new RulesEngine(net, traffic);
   const player = new Player(ground, net, traffic);
   const ap = new Autopilot(net, traffic, route);
+  if (!process.env.SANS_AJUSTEMENT) ap.fitToRoad((x, z) => ground.isRoad(x, z));
   const l0 = ap.segs[0].lane!;
   const p = l0.line.at(l0.fromEdgeS(pose.s));
   player.car.mode = 'auto';
@@ -51,7 +52,7 @@ it('diagnostic', () => {
   let trace = 0;
   let lastInd = 0, lastP = 0;
   let indOff = 0;
-  while (t < 600 && !ap.done && out.length < +(process.env.MAX ?? 40)) {
+  while (t < +(process.env.DUREE ?? 900) && !ap.done && out.length < +(process.env.MAX ?? 40)) {
     if (process.env.TRACE && t > +process.env.TRACE && t < +process.env.TRACE + +(process.env.DUR ?? 12) && trace++ % +(process.env.EVERY ?? 60) === 0) {
       out.push('TRACE ' + ctx());
       if (process.env.CEDER) {
@@ -89,7 +90,7 @@ it('diagnostic', () => {
             for (const x of link.exitCrossings) why.push(`passage en sortie s=${x.s.toFixed(1)} piétonSur=${T.pedestrianOn(x.crossing, o)}`);
             out.push('      ' + why.join(' | '));
           }
-          out.push(`   véh ${o.id} à ${d.toFixed(1)} m ${el} s=${o.s.toFixed(1)}/${o.path.length.toFixed(1)} v=${o.v.toFixed(1)} a=${o.a.toFixed(1)} attente=${o.waiting.toFixed(0)} écartJoueur=${T.playerGap(o, pi).toFixed(1)} joueurDansCarrefour=${pi.inJunction ? pi.inJunction.id : '-'}`);
+          out.push(`   véh ${o.id} à ${d.toFixed(1)} m ${el} s=${o.s.toFixed(1)}/${o.path.length.toFixed(1)} v=${o.v.toFixed(1)} a=${o.a.toFixed(1)} attente=${o.waiting.toFixed(0)} retenuPar=«${(o as any).why ?? ''}» écartJoueur=${T.playerGap(o, pi).toFixed(1)} joueurDansCarrefour=${pi.inJunction ? pi.inJunction.id : '-'}`);
         }
         for (const q of traffic.pedestrians) {
           const d = Math.hypot(q.x - player.car.x, q.z - player.car.z);
@@ -102,6 +103,9 @@ it('diagnostic', () => {
     if (process.env.CLIGNO && player.indicator !== lastP) { out.push(`CLIGNO-JOUEUR ${lastP}→${player.indicator} t=${t.toFixed(1)}`); lastP = player.indicator; }
     steer += Math.max(-2.2 * dt, Math.min(2.2 * dt, cmd.steer - steer));
     input.steer = steer; input.throttle = cmd.throttle; input.brake = cmd.brake;
+    // marche arrière (ou retour en marche avant) : à l'arrêt seulement
+    const want = cmd.reverse ? 'R' : 'D';
+    if (player.car.selector !== want) { if (Math.abs(player.car.vx) < 0.25) player.car.selector = want; else { input.throttle = 0; input.brake = 0.6; } }
     if (cmd.indicator !== player.indicator && cmd.indicator !== 0) player.setIndicator(cmd.indicator);
     // manœuvre terminée et rappel automatique non déclenché : on coupe le clignotant à la main
     indOff = cmd.indicator === 0 && player.indicator !== 0 ? indOff + dt : 0;

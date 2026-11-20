@@ -64,10 +64,12 @@ Le barème est celui en vigueur en **novembre 2026**, notamment :
 - dépassement d'un cycliste : 1 m en ville, 1,50 m hors agglomération ;
 - Paris et Montreuil en « ville 30 », zones de rencontre à 20 km/h, double-sens cyclable.
 
-Les sources consultées et leur niveau de fiabilité sont détaillés dans
-[`docs/code-de-la-route-recherche.md`](docs/code-de-la-route-recherche.md). Les sites officiels
-n'étant pas joignables depuis l'environnement de développement, les textes ont été lus à travers des
-extraits de recherche : chaque ligne y est marquée selon sa source. **En cas de doute, Légifrance fait foi.**
+Le catalogue a été **recoupé le 20 novembre 2026 avec les fiches officielles de service-public**,
+lues en entier : 18 lignes sur 31 y sont confirmées, les 13 autres reposent sur des extraits de
+Légifrance (qui refuse les accès automatisés) ; aucune valeur n'a dû être corrigée. Le détail, ligne
+par ligne et avec les adresses des pages, se trouve dans la section 7 de
+[`docs/code-de-la-route-recherche.md`](docs/code-de-la-route-recherche.md), et `tests/bareme.test.ts`
+fige les montants et les points vérifiés. **En cas de doute, Légifrance fait foi.**
 
 ## Réalisme de la conduite
 

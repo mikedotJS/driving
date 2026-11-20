@@ -526,7 +526,8 @@ export class Traffic {
     // même régime
     if (end.control === 'signal') {
       // au vert : celui qui tourne à gauche cède à ceux d'en face qui vont tout droit ou à droite
-      if (link.turn === 'left' && oLink && oLink.turn !== 'left') return true;
+      // (direction de l'autre inconnue — le joueur, un véhicule encore loin : on suppose qu'il va tout droit)
+      if (link.turn === 'left' && (!oLink || oLink.turn !== 'left')) return true;
       return false;
     }
     // l'anneau d'un giratoire est prioritaire
