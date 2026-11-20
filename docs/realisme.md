@@ -144,27 +144,37 @@ boulevard, rétroviseurs actifs) et relève le rapport du jeu ainsi que la duré
 
 Machine : `Apple M1 (Virtual)`, 3 cœurs ; carte annoncée par WebGL : `ANGLE (Apple, ANGLE Metal Renderer:
 Apple Paravirtual device)` — un M1 **virtualisé**, à accélération matérielle Metal, nettement en deçà d'un
-M1 non virtualisé ou d'une carte graphique de jeu. Mesure du 20 novembre 2026 (exécution n° 1) :
+M1 non virtualisé ou d'une carte graphique de jeu. Mesure du 20 novembre 2026 (exécution n° 3 : le
+moniteur parcourt 90 à 100 m à 20-27 km/h pendant le relevé) :
 
 | Réglage | Cadence moyenne (minimum) | Durée médiane d'une image | 95 % des images sous |
 |---|---|---|---|
-| 1920 × 1080, qualité moyenne (réglage par défaut), synchronisation verticale | 47 images/s (39) | 16,9 ms | 34 ms |
-| 1920 × 1080, qualité haute, cadence libre (sans synchronisation) | 63 images/s (44) | 13,6 ms | 31 ms |
-| 2560 × 1440, qualité haute, cadence libre | 43 images/s (37) | 19,4 ms | 52 ms |
-| 1920 × 1080, qualité haute, synchronisation verticale, sans fenêtre | 35 images/s (31) | 33,3 ms | 33 ms |
+| 1920 × 1080, qualité moyenne (réglage par défaut), synchronisation verticale | 41 images/s (28) | 17,5 ms | 35 ms |
+| 1920 × 1080, qualité haute, synchronisation verticale | 24 images/s (11) | 33,5 ms | 83 ms |
+| 1920 × 1080, qualité haute, cadence libre (sans synchronisation) | 41 images/s (24) | 21,2 ms | 48 ms |
+| 2560 × 1440, qualité haute, cadence libre | 40 images/s (32) | 22,8 ms | 53 ms |
 
-Charge relevée pendant ces essais : 400 à 510 appels de dessin et 1,6 à 2,3 millions de triangles par
-image (rétroviseurs compris), 6 à 17 véhicules et 14 à 24 piétons autour de la voiture.
+Charge relevée pendant ces essais : 370 à 530 appels de dessin et 1,3 à 2,5 millions de triangles par
+image (rétroviseurs compris), 9 à 20 véhicules et 18 à 24 piétons autour de la voiture.
 
-Lecture : sur ce GPU virtualisé modeste, la qualité moyenne en 1080p est fluide ; en qualité haute une
-image prend 13 à 14 ms, si bien qu'avec la synchronisation verticale la cadence oscille entre 60 et 30
-images par seconde — c'est la situation que le régulateur automatique (ci-dessous) corrige en allégeant
-l'affichage d'un cran. **Ce que cette mesure ne dit pas** : la cadence sur *votre* machine, que seule la
-mesure intégrée au jeu peut donner.
+Lecture, sans l'enjoliver : sur ce GPU virtualisé modeste, le réglage par défaut (qualité moyenne, 1080p)
+tourne autour de 40 images par seconde en conduite — jouable, pas parfaitement fluide. La qualité haute y
+est trop lourde : une image prend 21 ms, donc la synchronisation verticale la fait retomber à 30 puis
+20 images par seconde ; c'est le cas que le régulateur automatique (ci-dessous) corrige en allégeant
+l'affichage. La cadence presque identique en 1440p et en 1080p montre que la limite est côté processeur
+et pilote graphique (nombre d'objets), pas côté remplissage. Les deux premières exécutions, où la voiture
+restait à l'arrêt (défaut du lancement de la mesure, corrigé), donnaient 44 à 47 images/s en qualité
+moyenne et 41 à 63 en qualité haute sans synchronisation : d'une machine virtuelle à l'autre, les chiffres
+varient d'un tiers. **Ce que cette mesure ne dit pas** : la cadence sur *votre* machine, que seule la
+mesure intégrée au jeu peut donner ; une carte graphique de jeu devrait faire nettement mieux, mais ce
+n'est pas mesuré.
 
-Le tout premier lancement sur cette machine a aussi montré un **gel de 6,8 s** au début de la leçon : les
-programmes de rendu (shaders) se compilaient à la première image où chaque matériau apparaissait. Ils
-sont désormais compilés pendant l'écran de chargement, rétroviseurs compris (`Game.warmUp`).
+Démarrage : le tout premier lancement sur une machine montrait un **gel de 6,8 s** au début de la leçon,
+les programmes de rendu (shaders) se compilant à la première image où chaque matériau apparaissait. Ils
+sont désormais compilés pendant l'écran de chargement, rétroviseurs compris (`Game.warmUp`) : le
+chargement initial passe à 14-17 s la toute première fois (4 à 5 s ensuite) et le gel au début de la
+première leçon à 3,1 s, puis 1,1 à 1,4 s aux lancements suivants — le temps de construire le quartier
+de la leçon.
 
 ### Le jeu se règle lui-même
 

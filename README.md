@@ -29,8 +29,9 @@ Pour une version optimisée : `npm run build` puis `npm run preview`.
    Cliquez sur *Tester* : le jeu vous demande de quel côté le volant est parti et règle le sens tout seul.
 6. **Fluidité** : *Réglages → Mesurer la fluidité* fait conduire le moniteur 20 secondes et affiche la
    cadence d'images de votre machine, le nom de la carte graphique et un conseil de réglage. Pour
-   repère : sur un Mac M1 virtualisé (GPU modeste), la même mesure donne 47 images/s en 1080p qualité
-   moyenne et 63 en qualité haute sans synchronisation verticale — détail dans `docs/realisme.md`.
+   repère : sur un Mac M1 virtualisé (GPU modeste), la même mesure donne environ 41 images/s en 1080p
+   qualité moyenne ; la qualité haute y est trop lourde (24 images/s avec synchronisation verticale) —
+   détail dans `docs/realisme.md`.
 
 > Le retour de force **n'a pas pu être essayé sur un volant réel** depuis l'environnement de
 > développement. Il est vérifié avec un G923 émulé : les trames envoyées sont celles des pilotes Linux,
