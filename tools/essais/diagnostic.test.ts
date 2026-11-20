@@ -90,7 +90,7 @@ it('diagnostic', () => {
             for (const x of link.exitCrossings) why.push(`passage en sortie s=${x.s.toFixed(1)} piétonSur=${T.pedestrianOn(x.crossing, o)}`);
             out.push('      ' + why.join(' | '));
           }
-          out.push(`   véh ${o.id} à ${d.toFixed(1)} m ${el} s=${o.s.toFixed(1)}/${o.path.length.toFixed(1)} v=${o.v.toFixed(1)} a=${o.a.toFixed(1)} attente=${o.waiting.toFixed(0)} retenuPar=«${(o as any).why ?? ''}» écartJoueur=${T.playerGap(o, pi).toFixed(1)} joueurDansCarrefour=${pi.inJunction ? pi.inJunction.id : '-'}`);
+          out.push(`   véh ${o.id} à ${d.toFixed(1)} m ${el} s=${o.s.toFixed(1)}/${o.path.length.toFixed(1)} v=${o.v.toFixed(1)} a=${o.a.toFixed(1)} attente=${o.waiting.toFixed(0)} attenteJoueur=${o.playerWait.toFixed(0)} besoin=${T.playerOverlap(o, pi).toFixed(2)} gêneJoueur=${T.blocksPlayer(o, pi)} arrièreLibre=${T.rearFree(o)} recul=${o.backing.toFixed(1)}/${o.backCooldown.toFixed(0)} écartJoueur=${T.playerGap(o, pi).toFixed(1)} joueurDansCarrefour=${pi.inJunction ? pi.inJunction.id : '-'}`);
         }
         for (const q of traffic.pedestrians) {
           const d = Math.hypot(q.x - player.car.x, q.z - player.car.z);

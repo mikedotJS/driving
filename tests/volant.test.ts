@@ -1,6 +1,7 @@
 // Chaîne « volant » vérifiée sans matériel : un Logitech G923 émulé (objet Gamepad et périphérique
-// WebHID factices). Les trames de retour de force attendues sont celles des pilotes Linux de référence
-// (hid-lg4ff.c pour le G29/G923 PlayStation, hid-logitech-hidpp.c pour le G920/G923 Xbox).
+// WebHID factices). Les trames de retour de force attendues suivent le format des pilotes Linux de
+// référence (hid-lg4ff.c pour le G29/G923 PlayStation, hid-logitech-hidpp.c pour le G920/G923 Xbox),
+// restitué de mémoire : leur code source n'a pas été relu, et rien n'a été essayé sur un vrai volant.
 import { describe, it, expect, beforeEach } from 'vitest';
 
 // ── faux environnement de navigateur ──

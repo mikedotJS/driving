@@ -38,11 +38,11 @@ avec un **G923 émulé** (`tests/volant.test.ts`, 9 tests) :
   axes, profil mémorisé ;
 - un faux périphérique *WebHID* qui enregistre les trames envoyées :
   - G923 PlayStation/PC (046d:c266) : `F5` (centrage coupé), `F8 81 84 03` (900°),
-    `11 08 <niveau> 80` (effort constant, `80` = neutre), `13` (effort nul) — les trames du pilote
-    Linux `hid-lg4ff.c` ;
+    `11 08 <niveau> 80` (effort constant, `80` = neutre), `13` (effort nul) — le format du pilote
+    Linux `hid-lg4ff.c`, tel que je le connais (son code source n'a pas été relu pendant ce travail) ;
   - G923 Xbox/PC (046d:c26e) : HID++, recherche de la fonctionnalité `0x8123`, remise à zéro, gains,
     effet constant à démarrage automatique mis à jour à chaque image — la séquence du pilote Linux
-    `hid-logitech-hidpp.c`.
+    `hid-logitech-hidpp.c`, sous la même réserve.
 
 Ce qui reste invérifiable sans matériel : le **sens** de l'effort (une case « Inverser » et un bouton
 « Tester » sont prévus pour cela) et le ressenti.

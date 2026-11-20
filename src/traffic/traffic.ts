@@ -53,6 +53,14 @@ export class Vehicle {
   /** temps passé arrêté derrière une carrosserie détectée par le filet géométrique */
   netWait = 0;
   crashed = 0;
+  /** temps d'arrêt derrière un joueur lui-même immobile */
+  playerWait = 0;
+  /** écart latéral pris pour contourner le joueur arrêté qui empiète un peu sur la trajectoire (m, + à droite) */
+  dodge = 0;
+  /** recul en cours pour libérer le passage du joueur (m restants) et délai avant un nouveau recul (s) */
+  backing = 0;
+  backCooldown = 0;
+  reversing = false;
   wasHit = false;
   hitTime = 0;
   alive = true;
@@ -228,10 +236,14 @@ export class Traffic {
 
   private place(v: Vehicle) {
     const L = v.path;
-    // le point de référence est le milieu du véhicule (l'abscisse s est celle de l'avant)
-    const p = L.at(v.s - v.length / 2);
-    v.x = p.x; v.z = p.z;
-    v.heading = Math.atan2(p.tx, -p.tz);
+    // l'abscisse s est celle de l'avant. La caisse est posée sur la corde entre un point proche de l'avant
+    // et un point proche de l'arrière, tous deux sur la trajectoire : dans un virage, un véhicule long
+    // (autobus) garde ainsi ses extrémités sur sa voie au lieu de balayer la voie voisine avec son avant.
+    const a = L.at(v.s - v.length * 0.12), b = L.at(v.s - v.length * 0.88);
+    const dx = a.x - b.x, dz = a.z - b.z;
+    v.heading = Math.hypot(dx, dz) > 1e-6 ? Math.atan2(dx, -dz) : Math.atan2(a.tx, -a.tz);
+    // (écart de contournement : perpendiculaire à la caisse, positif vers la droite)
+    v.x = (a.x + b.x) / 2 + Math.cos(v.heading) * v.dodge; v.z = (a.z + b.z) / 2 + Math.sin(v.heading) * v.dodge;
   }
 
   // ───────────── conduite ─────────────
@@ -319,6 +331,39 @@ export class Traffic {
     let playerAhead = Infinity;
     if (player) {
       playerAhead = this.playerGap(v, player);
+      // immobilisé par un joueur lui-même à l'arrêt, qui n'empiète qu'en partie sur la trajectoire :
+      // on patiente quelques secondes, puis on s'écarte pour le contourner au pas
+      const still = Math.abs(player.speed) < 0.3;
+      if (playerAhead < 8 && v.v < 0.6 && still) v.playerWait += dt;
+      else if (playerAhead === Infinity || !still) v.playerWait = 0;
+      let target = 0;
+      if (still && v.playerWait > 5 && playerAhead < 12) {
+        const need = this.playerOverlap(v, player);
+        if (need !== 0 && Math.abs(need) <= 0.85) target = need;
+      }
+      v.dodge += clamp(target - v.dodge, -0.5 * dt, 0.5 * dt);
+      // face-à-face : le joueur est à l'arrêt en travers de notre route, et nous sommes en travers de la
+      // sienne. Comme le ferait un conducteur courtois, on recule de quelques mètres pour le laisser passer.
+      v.backCooldown = Math.max(0, v.backCooldown - dt);
+      if (v.backing <= 0 && v.backCooldown <= 0 && still && v.playerWait > 12 && target === 0 && this.blocksPlayer(v, player) && this.rearFree(v)) {
+        v.backing = Math.min(4, Math.max(0, v.s - 0.3));
+      }
+      if (v.backing > 0) {
+        if (!still || !this.rearFree(v)) v.backing = 0;
+        else {
+          const ds = Math.min(v.backing, 0.9 * dt);
+          v.s -= ds; v.backing -= ds; v.wheelPhase -= ds;
+          v.v = 0; v.a = 0; v.braking = false; v.reversing = true;
+          if (v.backing <= 0) { v.backCooldown = 25; v.playerWait = 0; }
+          this.place(v);
+          return;
+        }
+      }
+      v.reversing = false;
+      // dernier recours : blocage complet depuis une demi-minute, personne ne peut reculer — le véhicule
+      // qui barre la route du joueur est retiré de la circulation, pour que la leçon ne reste pas figée
+      if (still && v.playerWait > 30 && target === 0 && this.blocksPlayer(v, player)) { v.alive = false; return; }
+      if (target !== 0 && Math.abs(v.dodge - target) < 0.04) { playerAhead = Infinity; v0 = Math.min(v0, 1.8); }
       if (playerAhead < gap) {
         // composante de la vitesse du joueur le long de notre trajectoire
         const fx = Math.sin(v.heading), fz = -Math.cos(v.heading);
@@ -433,6 +478,57 @@ export class Traffic {
     if (v.lane && v.next) { test(v.next.line, 0, rem); test(v.next.to.line, 0, rem + v.next.line.length); }
     else if (v.link) test(v.link.to.line, 0, rem);
     return Math.max(0.1, best);
+  }
+
+  /** La carrosserie de `v` se trouve-t-elle juste devant le joueur, dans son couloir ? */
+  private blocksPlayer(v: Vehicle, p: PlayerInfo): boolean {
+    const fx = Math.sin(p.heading), fz = -Math.cos(p.heading);
+    const hx = Math.sin(v.heading), hz = -Math.cos(v.heading);
+    const r = v.width / 2;
+    for (let k = -1; k <= 1; k++) {
+      const dx = v.x + hx * v.length * 0.32 * k - p.x, dz = v.z + hz * v.length * 0.32 * k - p.z;
+      const along = dx * fx + dz * fz, lat = Math.abs(dx * -fz + dz * fx);
+      if (along - r > p.length / 2 - 0.5 && along - r < p.length / 2 + 7 && lat < p.width / 2 + r + 0.15) return true;
+    }
+    return false;
+  }
+
+  /** Personne juste derrière `v` (pour reculer de quelques mètres) ? */
+  private rearFree(v: Vehicle): boolean {
+    const hx = Math.sin(v.heading), hz = -Math.cos(v.heading);
+    for (const o of this.vehicles) {
+      if (o === v) continue;
+      const dx = o.x - v.x, dz = o.z - v.z;
+      const along = dx * hx + dz * hz, lat = Math.abs(dx * -hz + dz * hx);
+      if (along < 0 && along > -(v.length / 2 + o.length / 2 + 5) && lat < 2.2) return false;
+    }
+    for (const q of this.pedestrians) {
+      const dx = q.x - v.x, dz = q.z - v.z;
+      const along = dx * hx + dz * hz, lat = Math.abs(dx * -hz + dz * hx);
+      if (along < 0 && along > -(v.length / 2 + 5) && lat < 1.6) return false;
+    }
+    return true;
+  }
+
+  /** Écart latéral (m, signé : + vers la droite) qui permettrait de passer à côté du joueur ; 0 s'il n'est pas sur la trajectoire. */
+  private playerOverlap(v: Vehicle, p: PlayerInfo): number {
+    let best = 0, bestS = Infinity;
+    const test = (line: Polyline, sFrom: number, offset: number) => {
+      if (p.x < line.minX - 6 || p.x > line.maxX + 6 || p.z < line.minZ - 6 || p.z > line.maxZ + 6) return;
+      const pr = line.project(p.x, p.z);
+      if (pr.s <= sFrom - 0.5 || pr.s >= line.length - 0.01) return;
+      const ca = Math.abs(Math.sin(p.heading) * pr.tx - Math.cos(p.heading) * pr.tz);
+      const ext = p.width / 2 + (p.length / 2 - p.width / 2) * (1 - ca);
+      const need = v.width / 2 + ext + 0.3 - Math.abs(pr.d);
+      const along = offset + pr.s - sFrom;
+      if (need > 0 && along < bestS) { bestS = along; best = pr.d > 0 ? -need : need; }
+    };
+    const L = v.path;
+    test(L, v.s, 0);
+    const rem = L.length - v.s;
+    if (v.lane && v.next) test(v.next.line, 0, rem);
+    else if (v.link) test(v.link.to.line, 0, rem);
+    return best;
   }
 
   /** Distance libre jusqu'au joueur s'il se trouve sur la trajectoire (sinon ∞). */

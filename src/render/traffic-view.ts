@@ -51,7 +51,7 @@ export class TrafficView {
       }
       // tangage au freinage / à l'accélération
       s.visual.body.rotation.x = Math.max(-0.02, Math.min(0.03, -v.a * 0.006));
-      s.visual.setLights({ brake: v.braking, left: v.indicator < 0 && lit, right: v.indicator > 0 && lit, reverse: false, head: false });
+      s.visual.setLights({ brake: v.braking, left: v.indicator < 0 && lit, right: v.indicator > 0 && lit, reverse: v.reversing, head: false });
     }
     for (const [id, s] of this.slots) {
       if (alive.has(id)) continue;

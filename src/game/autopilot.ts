@@ -270,7 +270,12 @@ export class Autopilot {
               // décision prise une fois pour toutes au passage à l'orange (R412-31) : on s'arrête si c'est
               // possible sans freinage brutal, sinon on passe — et on ne change plus d'avis
               let stop = this.yellow.get(sp);
-              if (stop === undefined) { stop = d > v * 1.0 + (v * v) / (2 * 3.2) + 1; this.yellow.set(sp, stop); }
+              // aura-t-on franchi la ligne avant le rouge, à l'allure actuelle ?
+              const willPass = d / Math.max(v, 0.5) < sp.controller.timeToChange(sp.group ?? 0, time) - 0.3;
+              if (stop === undefined) stop = d > v * 1.0 + (v * v) / (2 * 3.2) + 1 || !willPass;
+              // ralenti en route (file, carrefour) : on n'y arrivera plus, on s'arrête tant que c'est possible
+              else if (!stop && !willPass && d > v * 0.5 + (v * v) / (2 * 5) + 0.3) stop = true;
+              this.yellow.set(sp, stop);
               if (stop && d > -0.6) stopAt(d - 0.4, 'feu orange');
             }
             else if (st === 'green' && d > 0 && d < 45 && sp.controller.timeToChange(sp.group ?? 0, time) < d / Math.max(2, v) - 1.5) vt = Math.min(vt, 6.5); // feu « mûr » : on lève le pied
@@ -309,7 +314,12 @@ export class Autopilot {
             const dHold = dLine > -1.2 ? dLine - 0.5 : dEnd - 0.8;
             if (dHold > -1.0 && this.mustYield(lane, link, Math.max(0, dHold), v)) stopAt(Math.max(0, dHold), 'priorité');
             // R415-2 : on ne s'engage pas si l'on risque de rester immobilisé dans le carrefour
-            else if (dHold > -1.0 && this.gapSlow && this.waitTime < 45 && gap < dEnd + link.line.length + 5.5) stopAt(Math.max(0, dHold), 'carrefour encombré');
+            else if (dHold > -1.0 && this.gapSlow && this.waitTime < 45) {
+              // la traversée comprend les voies très courtes qui relient les sommets d'un grand carrefour
+              let through = link.line.length;
+              for (let j = i + 2; j < this.segs.length && (!this.segs[j].lane || this.segs[j].line.length < 9); j++) through += this.segs[j].line.length;
+              if (gap < dEnd + through + 5.5) stopAt(Math.max(0, dHold), 'carrefour encombré');
+            }
           }
         }
       }
@@ -364,7 +374,7 @@ export class Autopilot {
 
     // ── face-à-face dans un carrefour : on recule de quelques mètres pour libérer le passage ──
     this.backCooldown = Math.max(0, this.backCooldown - dt);
-    if (this.backing <= 0 && this.backCooldown <= 0 && this.waitTime > 12 && reason === 'véhicule devant' && stopDist < 1.5 && seg.link && this.s < 7 && this.k > 0 && this.rearClear(car)) {
+    if (this.backing <= 0 && this.backCooldown <= 0 && this.waitTime > 12 && reason === 'véhicule devant' && stopDist < 1.5 && (seg.link || seg.line.length < 9) && this.s < 7 && this.k > 0 && this.rearClear(car)) {
       this.backing = Math.min(3.4, this.s + 2.4);
     }
     if (this.backing > 0) {

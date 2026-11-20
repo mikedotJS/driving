@@ -30,8 +30,9 @@ Pour une version optimisée : `npm run build` puis `npm run preview`.
 
 > Le retour de force **n'a pas pu être essayé sur un volant réel** depuis l'environnement de
 > développement. Il est vérifié avec un G923 émulé : les trames envoyées sont comparées, octet par
-> octet, à celles des pilotes Linux de référence (trames classiques du G29/G923 PlayStation, HID++
-> du G920/G923 Xbox — voir `tests/volant.test.ts`). Restent à confirmer sur le matériel le sens de
+> octet, au format des pilotes Linux de référence tel que je le connais, sans avoir relu leur code
+> source (trames classiques du G29/G923 PlayStation, HID++ du G920/G923 Xbox — voir
+> `tests/volant.test.ts`). Restent à confirmer sur le matériel le sens de
 > l'effort (case « Inverser ») et le ressenti : commencez avec une force modérée. Sans retour de
 > force, le volant fonctionne avec le ressort de centrage de G HUB.
 
