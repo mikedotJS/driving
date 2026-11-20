@@ -131,6 +131,10 @@ export class Traffic {
   private spawnTimer = 0;
   private pedTimer = 0;
   private cycTimer = 0;
+  /** carrefours complexes : identifiant de groupe par sommet, voies internes, véhicules immobilisés par groupe */
+  private clusterOf = new Map<Vertex, number>();
+  private internalLanes = new Set<Lane>();
+  private jam = new Map<number, number>();
   private cycleLanes: Lane[] = [];
   private drivable: Lane[];
   opts: TrafficOptions;
@@ -142,6 +146,7 @@ export class Traffic {
     this.rng = new Rng(this.opts.seed);
     this.drivable = net.lanes.filter((l) => l.kind === 'L' && l.line.length > 12 && l.links.length > 0);
     this.cycleLanes = net.lanes.filter((l) => l.kind === 'C' && l.line.length > 35);
+    this.buildClusters();
   }
 
   // ───────────── boucle ─────────────
@@ -165,11 +170,27 @@ export class Traffic {
   }
 
   private index() {
-    this.byLane.clear(); this.byLink.clear();
+    this.byLane.clear(); this.byLink.clear(); this.jam.clear();
     for (const v of this.vehicles) {
       if (v.link) { let a = this.byLink.get(v.link); if (!a) this.byLink.set(v.link, (a = [])); a.push(v); }
       else if (v.lane) { let a = this.byLane.get(v.lane); if (!a) this.byLane.set(v.lane, (a = [])); a.push(v); }
+      // véhicules immobilisés à l'intérieur d'un carrefour complexe
+      if (v.v < 0.3) {
+        const c = v.link ? this.clusterOf.get(v.link.vertex) : v.lane && this.internalLanes.has(v.lane) ? this.clusterOf.get(v.lane.to) : undefined;
+        if (c !== undefined) this.jam.set(c, (this.jam.get(c) ?? 0) + 1);
+      }
     }
+  }
+
+  /** Regroupe en « carrefours complexes » les sommets reliés par des tronçons très courts. */
+  private buildClusters() {
+    const parent = new Map<Vertex, Vertex>();
+    const find = (a: Vertex): Vertex => { let r = a; while (parent.get(r) !== r) r = parent.get(r)!; parent.set(a, r); return r; };
+    const short = this.net.edges.filter((e) => e.length < 14 && e.a.ends.length >= 3 && e.b.ends.length >= 3);
+    for (const e of short) { if (!parent.has(e.a)) parent.set(e.a, e.a); if (!parent.has(e.b)) parent.set(e.b, e.b); }
+    for (const e of short) parent.set(find(e.a), find(e.b));
+    for (const v of parent.keys()) this.clusterOf.set(v, find(v).id);
+    for (const e of short) for (const l of e.allLanes) this.internalLanes.add(l);
   }
 
   // ───────────── apparition ─────────────
@@ -409,8 +430,10 @@ export class Traffic {
         if (dEnd < 45) {
           const stopLine = Math.max(0, v.lane.fromEdgeS(end.sAt(end.stopDist)) - v.s);
           const blocked = this.mustYield(v, v.next, end, stopLine, player);
-          if (blocked) { mustStopAt = Math.min(mustStopAt, stopLine); v.waiting += dt; }
-          else v.waiting = 0;
+          if (blocked) mustStopAt = Math.min(mustStopAt, stopLine);
+          // l'attente ne retombe qu'une fois réellement reparti : sinon les règles qui dénouent un blocage
+          // mutuel s'annuleraient dès la première image où elles s'appliquent
+          if (blocked || (v.waiting > 0 && v.v < 1.5)) v.waiting += dt; else v.waiting = 0;
         }
       } else if (remaining < 40 && !v.lane.to.exit) {
         // impasse : on s'arrête au bout
@@ -579,6 +602,10 @@ export class Traffic {
       if (st !== 'green') return false; // l'arrêt au feu est géré par les points d'arrêt
     }
     if (ctl === 'stop' && v.stoppedAtStop < 0.8) return true;
+    // carrefour complexe (plusieurs sommets reliés par des voies très courtes, comme une grande place) :
+    // on n'y entre pas tant que des véhicules y sont immobilisés — c'est ce qui évite qu'il se noue (R415-2)
+    const cl = this.clusterOf.get(link.vertex);
+    if (cl !== undefined && !this.internalLanes.has(v.lane!) && (this.jam.get(cl) ?? 0) >= 2 && v.waiting < 45) return true;
     // ne pas s'engager si la sortie est encombrée
     const outQ = this.byLane.get(link.to) ?? [];
     for (const o of outQ) if (o.s - o.length < v.length + 2 && o.v < 1.5) return true;
@@ -602,7 +629,9 @@ export class Traffic {
         const eta = od / Math.max(2, o.v);
         if (od < 9 || eta < 3.6) {
           // blocage mutuel : le plus petit identifiant passe après une longue attente
-          if (v.waiting > 12 && o.v < 0.3 && o.waiting > 6 && v.id < o.id) continue;
+          // blocage mutuel entre usagers à l'arrêt (chacun cède à sa droite) : celui qui attend depuis le
+          // plus longtemps passe ; à attente égale, le plus petit identifiant
+          if (o.v < 0.3 && v.waiting > 8 && (v.waiting > o.waiting + 2 || (v.waiting > o.waiting - 2 && v.id < o.id))) continue;
           return true;
         }
       }

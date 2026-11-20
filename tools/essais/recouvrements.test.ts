@@ -59,6 +59,13 @@ it('recouvrements', () => {
     } else if (o.link) {
       why.push(`filet=${o.netWait.toFixed(0)}`);
       for (const x of o.link.exitCrossings) if (T.pedestrianOn(x.crossing, o)) why.push('piéton en sortie');
+      for (const q of T.byLink.get(o.link) ?? []) if (q !== o && q.s > o.s) why.push(`devant sur la liaison : ${q.id} s=${q.s.toFixed(1)} v=${q.v.toFixed(1)}`);
+      for (const c of o.link.conflicts) for (const q of T.byLink.get(c) ?? []) {
+        const mine = o.s / Math.max(1, o.link.line.length), theirs = q.s / Math.max(1, c.line.length);
+        const d = Math.hypot(q.x - o.x, q.z - o.z);
+        why.push(`conflit ${q.id} (${c.from.edge.name}→${c.to.edge.name}) avancement ${theirs.toFixed(2)} contre ${mine.toFixed(2)} dist=${d.toFixed(1)} v=${q.v.toFixed(1)}`);
+      }
+      why.push(`joueur=${T.playerGap(o, player).toFixed(1)} a=${o.a.toFixed(2)} attenteJoueur=${o.playerWait.toFixed(0)}`);
       for (const q of T.byLane.get(o.link.to) ?? []) why.push(`voie d'arrivée : ${q.id} s=${q.s.toFixed(1)} v=${q.v.toFixed(1)}`);
     } else why.push('sans suite (impasse)');
     for (const q of tr.vehicles) if (q !== o && Math.hypot(q.x - o.x, q.z - o.z) < 14 && T.bodyGap(o, q) < Infinity) why.push(`carrosserie de ${q.id} à ${T.bodyGap(o, q).toFixed(1)} m`);

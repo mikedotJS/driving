@@ -605,7 +605,7 @@ export class Autopilot {
     if (!tr) return Infinity;
     let best = Infinity;
     let what = '';
-    // marge latérale ; après une longue attente derrière un véhicule arrêté, on se faufile s'il y a la place
+    // marge latérale autour de la voiture (on ne se faufile jamais plus près : les angles des carrosseries se touchent vite)
     let slack = 1.05;
     this.gapSlow = false;
     let speed = 0; // vitesse de l'obstacle en cours d'examen
@@ -627,7 +627,6 @@ export class Autopilot {
     // chaque véhicule est approché par trois disques le long de sa carrosserie
     for (const o of tr.vehicles) {
       const fx = Math.sin(o.heading), fz = -Math.cos(o.heading), r = o.width / 2 + 0.1;
-      slack = this.waitTime > 10 && o.v < 0.2 ? 0.93 : 1.05;
       speed = o.v;
       for (const k of [-0.32, 0, 0.32]) test(o.x + fx * o.length * k, o.z + fz * o.length * k, r);
     }
