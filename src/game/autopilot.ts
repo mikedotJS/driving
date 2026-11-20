@@ -105,7 +105,9 @@ export class Autopilot {
       const i0 = P.length;
       for (let q = 0; q <= n; q++) {
         const sAt = (L * q) / n, p = sg.line.at(sAt);
-        const active = !sg.lane || (nearStart && sAt < ZONE) || (nearEnd && sAt > L - ZONE);
+        // (les raccords minuscules entre deux tronçons, et leurs abords immédiats, ne sont pas retouchés)
+        const tiny = L < 2 || (k > 0 && this.segs[k - 1].line.length < 2 && sAt < 3) || (k < this.segs.length - 1 && this.segs[k + 1].line.length < 2 && sAt > L - 3);
+        const active = !tiny && (!sg.lane || (nearStart && sAt < ZONE) || (nearEnd && sAt > L - ZONE));
         P.push({ x: p.x, z: p.z, nx: -p.tz, nz: p.tx, o: 0, active, seg: k });
       }
       bounds.push([i0, P.length - 1]);
@@ -128,7 +130,12 @@ export class Autopilot {
         for (const [ahead, weight] of [[0, 1], [wheelbase, 1]] as const) {
           const cx = qx[i] + hx[i] * ahead, cz = qz[i] + hz[i] * ahead;
           const right = !isRoad(cx + rx * SIDE, cz + rz * SIDE), left = !isRoad(cx - rx * SIDE, cz - rz * SIDE);
-          if (right === left) continue; // tout va bien, ou rue trop étroite pour décider
+          if (right && left) {
+            // les deux côtés hors chaussée : l'ajustement s'est égaré, on revient vers le tracé d'origine
+            if (Math.abs(P[i].o) > 0.05) { bad++; push[i] -= Math.sign(P[i].o) * 1.5; }
+            continue;
+          }
+          if (!right && !left) continue; // tout va bien
           bad++;
           const dir = right ? -1 : 1; // roue droite dehors : on se décale à gauche
           // l'essieu avant se trouve en avance sur le chemin : on agit aussi un peu plus loin
@@ -167,9 +174,10 @@ export class Autopilot {
     if (!changed) return;
     for (let k = 0; k < this.segs.length; k++) {
       const [i0, i1] = bounds[k];
-      let moved = false;
-      for (let i = i0; i <= i1; i++) if (Math.abs(P[i].o) > 0.02) { moved = true; break; }
-      if (!moved) continue;
+      let moved = false, far = false;
+      for (let i = i0; i <= i1; i++) { if (Math.abs(P[i].o) > 0.02) moved = true; if (Math.abs(P[i].o) > 2.2) far = true; }
+      // un décalage énorme trahit une incohérence locale de la carte : on garde alors le tracé d'origine
+      if (!moved || far) continue;
       const pts: number[] = [];
       for (let i = i0; i <= i1; i++) pts.push(P[i].x + P[i].nx * P[i].o, P[i].z + P[i].nz * P[i].o);
       this.segs[k].line = new Polyline(pts);
@@ -429,7 +437,9 @@ export class Autopilot {
       }
     }
     // créneau nécessaire : le temps de dégager le carrefour (plus long pour un tourne-à-gauche)
-    const need = clamp(link.line.length / 3.2 + 2.5, 4.5, 8.5);
+    // (départ arrêté : il faut le temps de s'élancer, de parcourir la liaison et de prendre de la vitesse
+    // pour ne pas faire freiner celui qui arrive)
+    const need = v < 2.5 ? clamp(link.line.length / 2.6 + 4, 6.5, 10) : clamp(link.line.length / 3.2 + 2.5, 4.5, 8.5);
     // Vue d'ensemble, comme un conducteur qui regarde au loin : tout véhicule qui fonce vers le carrefour
     // par une branche prioritaire et peut l'atteindre avant que nous l'ayons dégagé nous fait attendre,
     // même s'il est encore deux tronçons plus haut.
