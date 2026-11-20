@@ -101,11 +101,12 @@ l'anneau dans les giratoires, arrêt devant les piétons. Un **conducteur automa
 démonstration) sert aussi de banc d'essai : `npm test` lui fait parcourir cinq leçons dans la
 circulation et exige qu'il arrive au bout sans aucune faute grave ni accrochage — c'est ce qui limite
 les fausses fautes signalées à un élève qui conduit bien. Le balayage plus large (`npm run test:endurance`,
-48 trajets par série, départ choisi comme dans le jeu) a été parcouru sur huit séries : 384 trajets sur
-384 sans faute grave ni accrochage, dont 240 tirés une seule fois, à la fin, avec des graines jamais
-utilisées pendant la mise au point (`BASE=1300 npm run test:endurance` pour en rejouer une). Dans les
+48 trajets par série, départ choisi comme dans le jeu) passe sur 21 séries avec le code final : 1008
+trajets sur 1008 sans faute grave ni accrochage. Sur les séries jamais vues, à leur premier passage,
+le taux était de 858 sur 864 (99,3 %) : chaque échec a été diagnostiqué et corrigé, et il reste
+vraisemblablement des situations rares non rencontrées (`BASE=1300 npm run test:endurance` pour en rejouer une). Dans les
 grandes places comme la Croix de Chavaux, chaque véhicule réserve son trajet avant d'entrer : les
-carrosseries ne se chevauchent pratiquement plus (un instant relevé sur 18 essais de 6 minutes). Les mesures (physique comparée à une
+carrosseries ne se chevauchent pratiquement plus (17 essais de 6 minutes sur 18 sans aucun chevauchement). Les mesures (physique comparée à une
 citadine réelle, volant émulé, fluidité mesurée sur une carte graphique réelle, captures) sont dans [`docs/realisme.md`](docs/realisme.md).
 
 ## Le décor

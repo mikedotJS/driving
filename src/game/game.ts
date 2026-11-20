@@ -496,8 +496,11 @@ export class Game implements MenuHost {
     const lesson = LESSONS.find((l) => l.id === 'circulation') ?? FREE;
     this.start(lesson);
     this.perfLevel = 0; this.applySettings();
-    this.bench = [];
+    // quelques pas de simulation pour que la voiture soit située sur sa rue : sans cela la démonstration
+    // refuse de démarrer et la mesure porterait sur une voiture à l'arrêt
+    this.debugStep(0.1);
     this.toggleDemo();
+    this.bench = [];
     this.hud.coach('Mesure de la fluidité en cours…', 'Environ 20 secondes', false, 20);
   }
 

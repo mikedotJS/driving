@@ -43,6 +43,8 @@ async function mesure(nom, { fenetre, qualite, largeur, hauteur, libre }) {
     await page.waitForTimeout(12000);
     await page.screenshot({ path: `${OUT}/${nom}.png` });
     res.enConduite = await page.evaluate(() => { const g = window.__game; return { vitesseKmh: Math.round(g.player.car.speedKmh), vehicules: g.traffic.vehicles.length, pietons: g.traffic.pedestrians.length, appelsDessin: g.renderer.info.render.calls, triangles: g.renderer.info.render.triangles }; });
+    await page.waitForTimeout(7000);
+    res.aDixNeufSecondes = await page.evaluate(() => { const g = window.__game; return { vitesseKmh: Math.round(g.player.car.speedKmh), metresParcourus: Math.round(g.session.distance), demonstration: !!g.demo }; });
     await page.waitForFunction(() => [...document.querySelectorAll('h2')].some((h) => h.textContent.includes('Mesure de la fluidité')), null, { timeout: 120000 });
     res.rapportDuJeu = await page.evaluate(() => [...document.querySelectorAll('.menu p.note')].map((p) => p.textContent));
     // durée des images pendant la conduite (les 4 premières secondes servent au démarrage de la leçon)

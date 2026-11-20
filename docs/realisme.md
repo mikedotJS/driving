@@ -83,14 +83,17 @@ circulation, avec la vraie physique ; le moniteur ne doit rien lui reprocher de 
 | Essai | Résultat |
 |---|---|
 | `npm test` : 5 leçons (feux, priorité, tournants, giratoire, grands axes) | 5 sur 5 sans faute grave ni accrochage |
-| `npm run test:endurance` : 48 trajets (6 thèmes × 8 tirages), départ choisi comme dans le jeu | 48 sur 48 sans faute grave ni accrochage. Huit séries de 48 ont été parcourues (`BASE=101`, `500`, `900`, `1300`, `1700`, `2100`, `2500`, `2900`) : 384 trajets sur 384. Les trois premières ont servi à la mise au point ; les cinq autres n'ont été lancées qu'une fois, à la fin, sur des tirages jamais vus : 240 sur 240 |
-| Circulation seule autour de la Croix de Chavaux pendant 6 min, 18 tirages, à la densité du jeu (28 véhicules) | 17 tirages sans aucun chevauchement de carrosseries entre véhicules, 1 tirage avec un seul chevauchement instantané ; immobilisation la plus longue : 72 s (un véhicule qui laisse passer un cycle de feu) |
-| Même essai à densité forcée (45 véhicules) | 1 chevauchement instantané au total sur les 12 tirages ; immobilisation la plus longue : 44 s |
+| `npm run test:endurance` : 48 trajets (6 thèmes × 8 tirages), départ choisi comme dans le jeu | 48 sur 48 sans faute grave ni accrochage. Avec le code final, 21 séries de 48 ont été parcourues (`BASE=101`, `500`, `900`, puis de `1300` à `8100` par pas de 400) : **1008 trajets sur 1008** |
+| Séries jamais vues, à leur premier passage (18 séries lancées au fil de la mise au point, chacune avant toute correction la concernant) | 858 trajets sur 864 (99,3 %). Les 6 échecs — deux feux franchis au rouge (redémarrage à l'orange depuis l'arrêt, même cause), un refus de priorité en dégageant un carrefour à l'orange, un refus de priorité relevé à tort par le moteur de règles, un accrochage à 6 km/h entre deux files dont les trajectoires se frôlent, un piéton touché à 3 km/h — ont chacun été diagnostiqués et corrigés ; les trois dernières séries neuves (144 trajets) sont passées sans échec |
+| Circulation seule autour de la Croix de Chavaux pendant 6 min, 18 tirages, à la densité du jeu (28 véhicules) | 17 tirages sans aucun chevauchement de carrosseries entre véhicules, 1 tirage avec 6 chevauchements instantanés ; immobilisation la plus longue : 72 s (un véhicule qui laisse passer un cycle de feu) |
+| Même essai à densité forcée (45 véhicules), 18 tirages | 17 tirages sans aucun chevauchement, 1 tirage avec un seul ; immobilisation la plus longue : 74 s |
 | `node tools/essais/navigateur.cjs` : six leçons guidées ouvertes par le menu dans la version compilée du jeu, démonstration du moniteur, 4 à 7 min simulées chacune | aucune erreur JavaScript, aucune faute, aucun choc, aucun chevauchement ; jusqu'à 30 véhicules et 8 réservations simultanées ; 1,1 à 1,9 km parcourus par leçon (4 arrivées, 2 encore en route à la fin du temps imparti) |
 
 **Ce que ces chiffres ne disent pas.** Les trajets sont ceux d'un conducteur automatique, pas d'un
 élève : ils garantissent qu'une conduite correcte n'est pas sanctionnée et que la circulation ne se
-noue pas, non que tout comportement d'élève sera jugé comme le ferait un inspecteur. Jusqu'à cette
+noue pas, non que tout comportement d'élève sera jugé comme le ferait un inspecteur. Et le taux au
+premier passage le montre : il reste des situations rares — de l'ordre d'un trajet sur cent cinquante
+— que ces essais n'ont pas encore rencontrées. Jusqu'à cette
 version, les essais partaient toujours de la première rue de départ de chaque thème alors que le jeu
 en change selon le tirage : les aligner a révélé plusieurs défauts réels, corrigés ci-dessous.
 
@@ -117,7 +120,7 @@ si l'on risque de rester immobilisé). Deux trajets qui se croisent, se frôlent
 sont jamais réservés en même temps ; entre deux entrées concurrentes, celui qui attend depuis le plus
 longtemps passe d'abord, sauf priorité contraire. C'est ce qui a fait pratiquement disparaître les
 chevauchements de carrosseries (jusqu'à 200 instants par essai sur certains tirages avant cette
-version ; un seul instant sur 18 essais désormais).
+version ; 6 instants sur l'ensemble de 18 essais désormais, tous dans le même).
 
 **Égards envers l'élève.** Les autres véhicules le laissent s'insérer quand deux files se rejoignent
 en une seule ou qu'il met son clignotant vers leur voie ; nez à nez au milieu d'un carrefour, le
