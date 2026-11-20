@@ -1,0 +1,45 @@
+# Mesure de la fluidité du jeu sur une machine à accélération graphique matérielle (Mac Apple Silicon
+# hébergé par GitHub). Ne se lance qu'à la demande, ou quand ce fichier ou le script de mesure changent.
+name: Mesure de fluidité
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/fluidite.yml
+      - tools/essais/fluidite.cjs
+
+permissions:
+  contents: read
+
+jobs:
+  mesure:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Machine
+        run: |
+          sysctl -n machdep.cpu.brand_string || true
+          system_profiler SPDisplaysDataType || true
+      - run: npm ci
+      - run: npm run build
+      - name: Navigateur
+        run: |
+          npm install --no-save playwright
+          npx playwright install chromium
+      - name: Mesure
+        run: |
+          npx vite preview --port 4173 --strictPort > apercu.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:4173/ && break; sleep 1; done
+          node tools/essais/fluidite.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mesures-fluidite
+          path: mesures/
+          retention-days: 14
