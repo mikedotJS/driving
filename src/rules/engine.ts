@@ -84,7 +84,7 @@ export class RulesEngine {
   // stop
   private stopMin = new Map<number, number>();
   // carrefours
-  private entry: { vertex: Vertex; end: EdgeEnd; t: number; indL: boolean; indR: boolean; candidates: Vehicle[]; reported: boolean } | null = null;
+  private entry: { vertex: Vertex; end: EdgeEnd; t: number; indL: boolean; indR: boolean; short: boolean; candidates: Vehicle[]; reported: boolean } | null = null;
   private indHist: { t: number; ind: number }[] = [];
   private indOnSince = -1; private indDist = 0;
   // voies
@@ -95,7 +95,7 @@ export class RulesEngine {
   // divers
   private beltTime = 0; private hbTime = 0; private followTime = 0; private hornTime = 0;
   private revTime = 0; private lugTime = 0; private stillOnCrossing = 0;
-  private kerbWheels = 0; private kerbTime = 0;
+  private kerbWheels = 0; private kerbTime = 0; private kerbDist = 0;
   private pedSeen = new Map<number, { canStop: boolean }>();
   private pedPraised = new Set<number>();
   private pedFaulted = new Set<number>();
@@ -194,7 +194,8 @@ export class RulesEngine {
     const end = dir > 0 ? e.endB : e.endA;
     s.approach = end.vertex.ends.length >= 3 ? end : null;
     s.approachDist = Math.max(0, len - end.trim - sFront);
-    s.wrongWay = e.oneway && dir < 0;
+    // sens unique : aucune voie de circulation dans notre sens (le sens autorisé n'est pas forcément celui du tracé)
+    s.wrongWay = e.oneway && !(dir > 0 ? e.lanesF : e.lanesB).some((l) => l.kind !== 'C');
     // prochain point réglementé
     s.nextControl = null;
     for (const st of this.stops) {
@@ -363,11 +364,13 @@ export class RulesEngine {
     // trottoir
     let up = 0;
     for (let i = 0; i < 4; i++) if (car.groundH[i] > 0.05) up++;
+    // une roue qui frôle la bordure est une erreur de trajectoire ; deux roues, ou une roue qui y reste, c'est rouler sur le trottoir
     if (up > 0 && speed > 0.4) {
       this.kerbTime += dt;
-      if (up >= 2 || this.kerbTime > 0.6) this.report('trottoir', car);
+      this.kerbDist += speed * dt;
+      if (up >= 2 || (this.kerbTime > 1.6 && this.kerbDist > 3.5)) this.report('trottoir', car);
       else if (this.kerbWheels === 0) this.report('bordure', car);
-    } else this.kerbTime = 0;
+    } else { this.kerbTime = 0; this.kerbDist = 0; }
     this.kerbWheels = up;
   }
 
@@ -401,7 +404,10 @@ export class RulesEngine {
           if (o.v > 1.5 && (eta < 2.8 || od < 7) && this.priorityOverPlayer(o, end)) candidates.push(o);
         }
       }
-      this.entry = { vertex: V, end, t: this.time, indL: this.indicatorWas(-1, 3.5), indR: this.indicatorWas(1, 3.5), candidates, reported: false };
+      // tronçon d'approche très court (carrefours enchaînés) : impossible de prévenir avant l'entrée,
+      // on accepte alors le clignotant mis pendant la manœuvre
+      const short = end.edge.length - end.trim - end.other.trim < 15;
+      this.entry = { vertex: V, end, t: this.time, indL: this.indicatorWas(-1, 3.5), indR: this.indicatorWas(1, 3.5), short, candidates, reported: false };
     }
     const en = this.entry;
     if (!en) return;
@@ -410,7 +416,7 @@ export class RulesEngine {
       for (const o of en.candidates) {
         if (!o.alive) continue;
         const d = Math.hypot(o.x - car.x, o.z - car.z);
-        if (o.forcedByPlayer > 0.2 || (d < 5.5 && o.v > 1 && this.closing(car, o))) {
+        if (o.forcedByPlayer > 0.2 || (d < 9 && o.v > 1.5 && this.closing(car, o))) {
           en.reported = true;
           this.reportPriority(car, en.end);
           break;
@@ -434,7 +440,7 @@ export class RulesEngine {
           if (!en.indR && !this.indicatorWas(1, 4)) this.report('clignotant', car, 'sortie du giratoire');
         } else if (!enterRing && Math.abs(turn) > 0.6 && !sameStreet) {
           const want = turn > 0 ? 1 : -1;
-          const ok = want > 0 ? en.indR : en.indL;
+          const ok = (want > 0 ? en.indR : en.indL) || (en.short && this.indicatorWas(want, this.time - en.t + 0.5));
           if (!ok) this.report('clignotant', car, turn > 0 ? 'en tournant à droite' : 'en tournant à gauche');
         }
       }
@@ -442,9 +448,16 @@ export class RulesEngine {
     } else if (backOut || this.time - en.t > 40) this.entry = null;
   }
 
+  /** Le joueur se trouve-t-il dans le couloir de `o`, juste devant lui ? (il lui coupe la route) */
   private closing(car: Car, o: Vehicle): boolean {
     const rx = car.x - o.x, rz = car.z - o.z;
-    return rx * Math.sin(o.heading) - rz * Math.cos(o.heading) > 0; // le joueur est devant lui
+    const fx = Math.sin(o.heading), fz = -Math.cos(o.heading);
+    const ahead = rx * fx + rz * fz;
+    const lat = Math.abs(rx * -fz + rz * fx);
+    // demi-largeur du joueur vue depuis l'axe de l'autre véhicule (il peut être en travers)
+    const cross = Math.abs(car.forwardX * fx + car.forwardZ * fz);
+    const half = car.spec.width / 2 + (car.spec.length / 2 - car.spec.width / 2) * (1 - cross);
+    return ahead > 0 && ahead < o.length / 2 + 7 && lat < o.width / 2 + half + 0.2;
   }
 
   /** Le véhicule `o` est-il prioritaire sur le joueur arrivant par `end` ? */

@@ -29,7 +29,7 @@ const [X0, Z1] = proj(BBOX.lat0, BBOX.lon0);
 const [X1, Z0] = proj(BBOX.lat1, BBOX.lon1);
 const RECT = { x0: X0 - MARGIN, x1: X1 + MARGIN, z0: Z0 - MARGIN, z1: Z1 + MARGIN };
 const CHUNK = 100; // m
-const KERB_R = 3.2; // rayon de raccordement des bordures aux carrefours (m)
+const KERB_R = 4.5; // rayon de raccordement des bordures aux carrefours (m)
 const MIN_SIDEWALK = 1.4;
 const SCALE = 100; // clipper travaille en cm entiers
 
@@ -528,24 +528,26 @@ function designStrips(e) {
   if (A.link) lw = Math.max(lw, 3.4);
   const busW = 3.3, cycW = 1.5;
   let nBus = (A.busF ? 1 : 0) + (A.busB ? 1 : 0);
-  let nCyc = (A.cycR ? 1 : 0) + (A.cycL ? 1 : 0);
+  let cycL = A.cycL, cycR = A.cycR;
+  let nCyc = (cycR ? 1 : 0) + (cycL ? 1 : 0);
   const travel = () => lanesTotal * lw + nBus * busW + nCyc * cycW;
 
   let pL = A.parkL, pR = A.parkR;
   const noAuto = A.living || A.roundabout || A.link || A.bridge || A.cls === 'service' || e.len < 25;
-  const contra = A.ow && (A.busB || A.cycL);
+  const contra = A.ow && (A.busB || cycL);
   let wL = pL && pL !== 'no' ? PARK_W[pL] : 0;
   let wR = pR && pR !== 'no' ? PARK_W[pR] : 0;
   const autoL = pL === undefined && !noAuto && !contra;
   const autoR = pR === undefined && !noAuto;
 
   if (A.width) {
-    // largeur relevée : on répartit
+    // largeur relevée : on répartit ; si tout ne tient pas, on renonce d'abord à la bande cyclable
+    if (A.width - travel() - wL - wR < -0.3 && nCyc) { cycL = false; cycR = false; nCyc = 0; }
     let rem = A.width - travel() - wL - wR;
     if (rem >= 1.9 && autoR && !wR) { wR = 2.0; rem -= 2.0; pR = 'parallel'; }
     if (rem >= 1.9 && autoL && !wL) { wL = 2.0; rem -= 2.0; pL = 'parallel'; }
     if (rem > 0) lw += Math.min(0.7, rem / lanesTotal);
-    else if (rem < 0) lw = Math.max(2.5, lw + rem / lanesTotal);
+    else if (rem < 0) lw = Math.max(lanesTotal === 1 ? 2.9 : 2.6, lw + rem / lanesTotal);
   } else if (bounded) {
     let avail = 2 * Hpark - travel() - wL - wR;
     // stationnement « deviné » si la rue est assez large entre façades
@@ -564,23 +566,25 @@ function designStrips(e) {
   // respect du couloir disponible
   if (bounded) {
     let W = travel() + wL + wR;
-    const maxW = Math.max(2 * H, lanesTotal * 2.5 + nBus * 3.0 + nCyc * 1.2);
+    // rue trop étroite pour tout loger : on renonce d'abord à la bande cyclable matérialisée
+    if (travel() > 2 * H && nCyc && lanesTotal * 2.9 + nBus * busW <= 2 * H + 0.4) { cycL = false; cycR = false; nCyc = 0; }
+    const maxW = Math.max(2 * H, lanesTotal * (lanesTotal === 1 ? 2.9 : 2.6) + nBus * 3.0 + nCyc * 1.2);
     if (W > maxW && wL) { W -= wL; wL = 0; }
     if (W > maxW && wR) { W -= wR; wR = 0; }
     if (W > maxW) {
       const over = W - maxW;
-      lw = Math.max(2.5, lw - over / lanesTotal);
+      lw = Math.max(lanesTotal === 1 ? 2.9 : 2.6, lw - over / lanesTotal);
     }
   }
 
   const strips = [];
   if (wL) strips.push(['P', r2(wL), 0, pL]);
-  if (A.cycL) strips.push(['C', cycW, -1]);
+  if (cycL) strips.push(['C', cycW, -1]);
   if (A.busB) strips.push(['B', busW, -1]);
   for (let i = 0; i < A.nB; i++) strips.push(['L', r2(lw), -1]);
   for (let i = 0; i < A.nF; i++) strips.push(['L', r2(lw), 1]);
   if (A.busF) strips.push(['B', busW, 1]);
-  if (A.cycR) strips.push(['C', cycW, 1]);
+  if (cycR) strips.push(['C', cycW, 1]);
   if (wR) strips.push(['P', r2(wR), 0, pR]);
   e.strips = strips;
   e.width = r2(strips.reduce((s, x) => s + x[1], 0));
@@ -680,6 +684,52 @@ let road;
 {
   let all = [];
   for (const e of edges) all = all.concat(bufferLine(e.pts, e.width / 2));
+  // Changement de largeur entre deux tronçons qui se prolongent (y compris à une fourche) : biseau
+  // progressif côté étroit, sinon la bordure fait une marche en travers des voies qui se décalent
+  const bends = []; // sommets à deux branches formant un coude : coin intérieur à arrondir
+  {
+    const at = new Map();
+    edges.forEach((e) => { for (const i of [e.ia, e.ib]) { let a = at.get(i); if (!a) at.set(i, (a = [])); a.push({ e, pts: e.ia === i ? e.pts : e.pts.slice().reverse() }); } });
+    const hull = (P) => {
+      const p = P.slice().sort((u, w) => u[0] - w[0] || u[1] - w[1]);
+      const cr = (o, u, w) => (u[0] - o[0]) * (w[1] - o[1]) - (u[1] - o[1]) * (w[0] - o[0]);
+      const lo = [], up = [];
+      for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+      for (const q of p.reverse()) { while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+      return lo.slice(0, -1).concat(up.slice(0, -1));
+    };
+    let tapers = 0;
+    for (const [i, list] of at) {
+      if (list.length < 2) continue;
+      // direction de chaque branche en quittant le sommet
+      for (const en of list) {
+        const a = en.pts[0], b = en.pts[1];
+        const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        en.dx = (b[0] - a[0]) / l; en.dz = (b[1] - a[1]) / l;
+      }
+      if (list.length === 2 && list[0].e !== list[1].e && list[0].dx * list[1].dx + list[0].dz * list[1].dz > -0.95) bends.push(i);
+      for (const wide of list) for (const narrow of list) {
+        if (wide.e === narrow.e) continue;
+        const dh = (wide.e.width - narrow.e.width) / 2;
+        if (dh < 0.3) continue;
+        if (wide.dx * narrow.dx + wide.dz * narrow.dz > -0.64) continue; // pas dans le prolongement
+        const pts = narrow.pts;
+        let len = 0;
+        for (let k = 1; k < pts.length; k++) len += Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]);
+        const T = Math.min(Math.max(4, dh * 3.2 + 3), 12.5, len * 0.45);
+        const pT = G.pointAt(pts, T);
+        const ax = -wide.dx, az = -wide.dz; // sens d'arrivée par le tronçon large
+        const hA = wide.e.width / 2, hB = narrow.e.width / 2;
+        const v = pts[0];
+        const quad = toPath(hull([[v[0] - az * hA, v[1] + ax * hA], [pT.x - pT.tz * hB, pT.z + pT.tx * hB], [pT.x + pT.tz * hB, pT.z - pT.tx * hB], [v[0] + az * hA, v[1] - ax * hA]]));
+        // même sens que les autres emprises, sinon l'union (règle « non nul ») creuserait un trou
+        if (!C.Clipper.Orientation(quad)) quad.reverse();
+        all.push(quad);
+        tapers++;
+      }
+    }
+    log(`biseaux de changement de largeur : ${tapers}, coudes à arrondir : ${bends.length}`);
+  }
   let U = boolOp(UNION, all, null);
   log(`union chaussée : ${U.length} anneaux, ${nVerts(U)} sommets, ${(areaM2(U) / 1e4).toFixed(1)} ha`);
   // fermeture morphologique limitée au voisinage des carrefours → bordures arrondies
@@ -689,7 +739,7 @@ let road;
   const maxHalf = new Array(vertices.length).fill(0);
   for (const e of edges) { maxHalf[e.ia] = Math.max(maxHalf[e.ia], e.width / 2); maxHalf[e.ib] = Math.max(maxHalf[e.ib], e.width / 2); }
   vertices.forEach((v, i) => {
-    if (deg[i] < 3) return;
+    if (deg[i] < 3 && !bends.includes(i)) return;
     discs.push(circle(v.x, v.z, maxHalf[i] + KERB_R * 2.2 + 1.5));
   });
   const fill = boolOp(INTER, closed, boolOp(UNION, discs, null));

@@ -389,7 +389,8 @@ function buildLoft(st: Style, coarse = false): Loft {
       const jm = (j + NR - 1) % NR;
       if (all(i, j) && all(i - 1, j) && all(i, jm) && all(i - 1, jm)) continue; // sommet entièrement intérieur
       const q = (i * NR + j) * 3, dz = P[q + 2] - zc, dy = P[q + 1] - yc, l = Math.hypot(dz, dy) || 1;
-      P[q + 2] = zc + (dz / l) * Ra; P[q + 1] = yc + (dy / l) * Ra;
+      if (dy < 0) P[q + 2] = zc + Math.sign(dz || 1) * Math.sqrt(Math.max(Ra * Ra - dy * dy, 0)); // sous le moyeu : glissement horizontal (bas de caisse rectiligne)
+      else { P[q + 2] = zc + (dz / l) * Ra; P[q + 1] = yc + (dy / l) * Ra; }
       rims[j > NH ? 1 : 0].push(i * NR + j);
     }
     const ang = (k: number): number => { const a = Math.atan2(P[k * 3 + 1] - yc, P[k * 3 + 2] - zc); return a < -Math.PI / 2 ? a + Math.PI * 2 : a; };
@@ -493,7 +494,7 @@ function styleOf(kind: CarKind): Style {
       glass: [1.46, 3.74], pillars: [2.62, 3.42], doors: [1.46, 2.62, 3.5], lampF: [0.632, 0.7], lampR: [0.84, 1.035],
     };
     case 'suv': return {
-      ...base, plate: 'RM-212-NE', plateF: 0.56, plateR: 0.86, crown: 0.05, archGap: 0.07, cladding: 0.43,
+      ...base, plate: 'RM-212-NE', plateF: 0.56, plateR: 0.86, crown: 0.05, archGap: 0.07, step: 0.088, cladding: 0.43,
       keys: [...noseKeys(0.58, 0.93, 0.26), [0.62, 1.07, 0.25], [1.2, 1.125, 0.23, 1], [1.245, 1.152, 0.23], [1.83, 1.515, 0.22], [1.95, 1.585, 0.22], [2.55, 1.63, 0.22], [3.3, 1.615, 0.225], [3.98, 1.56, 0.25, 1], [4.27, 1.2, 0.33, 1], ...tailKeys(L, 0.72, 1.2, 0.33)],
       iCowl: 6, iHead: 9, iRoofEnd: 12, iGlass: 13, iTail: 13,
       bow: [0, 0.22, 0.13, 0.215, 0.62, 0.17, 1.2, 0.12, 1.95, 0.08, 2.55, 0.03, 3.3, -0.02, 3.98, -0.05, 4.27, -0.09, 4.42, -0.12],
@@ -502,7 +503,7 @@ function styleOf(kind: CarKind): Style {
       glass: [1.38, 3.95], pillars: [2.48, 3.36], doors: [1.38, 2.48, 3.32], lampF: [0.79, 0.878], lampR: [0.98, 1.185],
     };
     case 'utilitaire': return {
-      ...base, van: true, plate: 'TL-197-EU', plateF: 0.5, plateR: 0.62, crown: 0.07, archGap: 0.07, cladding: 0.37,
+      ...base, van: true, plate: 'TL-197-EU', plateF: 0.5, plateR: 0.62, crown: 0.07, archGap: 0.07, step: 0.095, cladding: 0.37,
       keys: [...noseKeys(0.56, 1.0, 0.24), [0.45, 1.1, 0.23], [0.82, 1.16, 0.22, 1], [0.86, 1.19, 0.22], [1.42, 1.8, 0.21], [1.56, 1.9, 0.21], [2.2, 1.95, 0.21, 0, 3], [3.6, 1.95, 0.21, 0, 3], [4.76, 1.925, 0.23], [4.84, 1.84, 0.27], [4.875, 1.55, 0.3], [4.89, 1.15, 0.36], [4.897, 0.85, 0.5], [4.9, 0.68, 0.68]],
       iCowl: 6, iHead: 9, iRoofEnd: 12, iGlass: 13, iTail: 13,
       bow: [0, 0.2, 0.13, 0.195, 0.45, 0.17, 0.82, 0.13, 1.56, 0.08, 2.2, 0.02, 4.0, 0, 4.76, -0.04, 4.84, -0.06, 4.9, -0.08],
@@ -524,7 +525,7 @@ function styleOf(kind: CarKind): Style {
 /** attribution des carreaux d'une voiture (citadine, berline, SUV, utilitaire) */
 function carClass(st: Style): (x: Cell) => DM | null {
   const nk = st.keys.length, d = st.d, Ra = d.wheelRadius + st.archGap, aF = d.frontOverhang - Ra, aR = d.frontOverhang + d.wheelbase + Ra;
-  const sN = st.keys[0][0] + st.bow[1], sT = d.length + st.bow[st.bow.length - 1];
+  const sN = st.keys[0][0] + st.bow[1], sT = d.length + st.bow[st.bow.length - 1], lt = st.iTail + (st.van ? 1 : 0);
   return (x) => {
     const { seg, hc, y, ss } = x, IND = x.side < 0 ? INDL : INDR, tailSeg = nk - 2 - seg;
     if (hc < 8) { // dessous et bas des boucliers
@@ -534,13 +535,13 @@ function carClass(st: Style): (x: Cell) => DM | null {
     }
     if (hc < 17) { // flancs
       if (hc === 16 && (seg === 2 || seg === 3)) return seg === 2 ? IND : HEAD;
-      if ((seg < st.iTail && hc >= 15 && ss > sT - 0.2 && y > st.lampR[0] - 0.04) || (seg === st.iTail && hc >= 15) || (seg === st.iTail + 1 && hc === 16)) return TAIL;
+      if (hc >= 15 && ((seg < lt && seg >= st.iGlass - 1 && ss > sT - 0.2) || seg === lt || seg === lt + 1)) return TAIL;
       return y < st.cladding ? TRIM : PAINT;
     }
     if (hc < 22) { // vitrage latéral
       const g = hc - 17;
       if (seg === 2 || seg === 3) return seg === 2 ? IND : HEAD;
-      if (seg === st.iTail || seg === st.iTail + 1) return TAIL;
+      if (seg === lt || seg === lt + 1) return TAIL;
       if (g === 4 || ss < st.glass[0] || ss > st.glass[1] || seg < st.iCowl || seg >= st.iGlass) return PAINT;
       if (st.pillars.some((p) => Math.abs(ss - p) < 0.04)) return GLOSS;
       return g === 0 ? TRIM : GLASS;
@@ -549,7 +550,7 @@ function carClass(st: Style): (x: Cell) => DM | null {
     if (seg < 4) return seg === 2 ? (tc === 0 ? IND : tc <= 3 ? HEAD : GRILLE) : seg === 1 && tc >= 3 ? GRILLE : PAINT;
     if (seg >= st.iCowl && seg < st.iHead) return tc >= 2 ? (seg === st.iCowl ? TRIM : GLASS) : PAINT;
     if (seg >= st.iRoofEnd && seg < st.iGlass) return tc >= 2 && !st.van ? GLASS : PAINT;
-    if (seg >= st.iTail && y > st.lampR[0] && y < st.lampR[1]) return tc <= 3 ? TAIL : tc === 4 ? (y > (st.lampR[0] + st.lampR[1]) / 2 ? IND : REV) : PAINT;
+    if (seg === lt || seg === lt + 1) return tc <= 3 ? TAIL : tc === 4 ? (seg === lt ? IND : REV) : PAINT;
     return PAINT;
   };
 }
@@ -624,7 +625,7 @@ function carDetails(st: Style, L: Loft, paint: GB, det: GB): void {
   for (const ar of L.arches) {
     const pts = ar.rim.map((k) => gp(L, k)), xi = ar.side * (d.width / 2 - (st.bus ? 0.42 : 0.3)), ctr = V(xi, d.wheelRadius, ar.zc);
     for (let k = 0; k < pts.length - 1; k++) {
-      const a = pts[k], b = pts[k + 1]; if (a.distanceToSquared(b) < 1e-8 || a.y + b.y < d.wheelRadius * 1.5) continue;
+      const a = pts[k], b = pts[k + 1]; if (a.distanceToSquared(b) < 1e-8) continue;
       const ai = V(xi, a.y, a.z), bi = V(xi, b.y, b.z), hint = V(0, ctr.y - (a.y + b.y) / 2, ctr.z - (a.z + b.z) / 2);
       det.tri(a, ai, b, hint).tri(b, ai, bi, hint).tri(ctr, ai, bi, V(ar.side, 0, 0));
     }
@@ -632,7 +633,7 @@ function carDetails(st: Style, L: Loft, paint: GB, det: GB): void {
       det.mat(TRIM.hex, TRIM.rough);
       const out = (p: V3): V3 => { const a = Math.atan2(p.y - d.wheelRadius, p.z - ar.zc), y = d.wheelRadius + Math.sin(a) * (Ra + 0.05), z = ar.zc + Math.cos(a) * (Ra + 0.05); return V(ar.side * (sideX(L, z - z0, y) + 0.006), y, z); };
       for (let k = 0; k < pts.length - 1; k++) {
-        const a = pts[k].clone(), b = pts[k + 1].clone(); if (a.distanceToSquared(b) < 1e-8) continue;
+        const a = pts[k].clone(), b = pts[k + 1].clone(); if (a.distanceToSquared(b) < 1e-8 || Math.min(a.y, b.y) < d.wheelRadius * 0.95) continue;
         a.x += ar.side * 0.006; b.x += ar.side * 0.006;
         const ao = out(a), bo = out(b), hint = V(ar.side, 0, 0);
         det.tri(a, ao, b, hint).tri(b, ao, bo, hint);
@@ -679,7 +680,7 @@ function carDetails(st: Style, L: Loft, paint: GB, det: GB): void {
   ribbon(det, L, across(i4)); ribbon(det, L, along(i4, iC, 24)); ribbon(det, L, along(i4, iC, 36));
   ribbon(det, L, across(iR)); ribbon(det, L, across(iT)); ribbon(det, L, along(iR, iT, 24)); ribbon(det, L, along(iR, iT, 36));
   // rétroviseurs extérieurs : coque peinte, pied noir, glace, répétiteur de clignotant
-  const sC = st.keys[st.iCowl][0], sM = sC + pl(sC, st.bow) + 0.14, yM = pl(sM, st.belt) + 0.085, zM = z0 + sM;
+  const sC = st.keys[st.iCowl][0], sM = sC + pl(sC, st.bow) + 0.2, yM = pl(sM, st.belt) + 0.085, zM = z0 + sM;
   for (const s of [-1, 1]) {
     const xb = sideX(L, sM, yM - 0.05), cx = s * (xb + 0.115), zr = zM + 0.055 * 0.46;
     paint.add(new THREE.SphereGeometry(1, 10, 5, 0, Math.PI * 2, 0, 2.05), TR(cx, yM, zM, -Math.PI / 2, 0, 0, 0.105, 0.055, 0.068));
@@ -883,7 +884,7 @@ function clusterBackground(): HTMLCanvasElement {
 
 // ───────────────────────────── poste de conduite ─────────────────────────────
 
-const C_DASH = 0x18191b, C_LOW = 0x26272b, C_BAND = 0x62656a, C_HEAD = 0x9d9b95, C_PILLAR = 0x858480, C_LEATHER = 0x141416, C_PIANO = 0x060607, C_CHROME = 0xc4c7ca;
+const C_DASH = 0x18191b, C_LOW = 0x26272b, C_BAND = 0x62656a, C_HEAD = 0x9d9b95, C_PILLAR = 0x6f6e6b, C_LEATHER = 0x141416, C_PIANO = 0x060607, C_CHROME = 0xc4c7ca;
 type MatOf = (i: number, j: number) => [number, number, number?];
 /** grille lissée émise bande par bande (j → j+1), la matière de chaque sommet étant donnée par `matOf(i, j)` */
 function emitStrips(gb: GB, P: Float32Array, nu: number, nv: number, matOf: MatOf, flip = false): void {
@@ -927,10 +928,10 @@ export function createCockpit(): Cockpit {
   });
   emitStrips(g, gridOf(dash), xs.length, 11, (i, j) => (j === 6 && binW(xs[i]) < 0.5 ? [C_BAND, 0.42, 0.55] : j >= 7 ? [C_LOW, 0.8] : [C_DASH, 0.9]));
   // écran central 9 pouces 16:9 (dalle + coque), orienté vers le conducteur
-  const SM = TR(0.03, 0.94, -0.45, -0.17, -0.22), at = (m: THREE.Matrix4, x: number, y: number, z: number): THREE.Matrix4 => m.clone().multiply(TR(x, y, z));
-  g.mat(C_PIANO, 0.25).box(0.216, 0.129, 0.012, at(SM, 0, 0, -0.0065));
+  const SM = TR(0.03, 0.948, -0.422, -0.17, -0.22), at = (m: THREE.Matrix4, x: number, y: number, z: number): THREE.Matrix4 => m.clone().multiply(TR(x, y, z));
+  g.mat(C_PIANO, 0.5).box(0.216, 0.129, 0.012, at(SM, 0, 0, -0.0065)).mat(C_DASH, 0.8).box(0.09, 0.06, 0.035, at(SM, 0, -0.02, -0.03));
   const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.1992, 0.1121), new THREE.MeshBasicMaterial({ color: 0x10151b }));
-  screen.position.set(0.03, 0.94, -0.45); screen.rotation.set(-0.17, -0.22, 0, 'YXZ');
+  screen.position.set(0.03, 0.948, -0.422); screen.rotation.set(-0.17, -0.22, 0, 'YXZ');
   // aérateurs, commandes de climatisation, boîte à gants
   for (const x of [-0.69, -0.075, 0.135, 0.69]) {
     g.mat(C_PIANO, 0.3).box(0.118, 0.054, 0.012, TR(x, 0.832, ZR + 0.005));
@@ -939,7 +940,7 @@ export function createCockpit(): Cockpit {
     g.box(0.012, 0.03, 0.008, TR(x, 0.832, ZR + 0.014));
   }
   for (const dx of [-0.07, 0, 0.07]) {
-    g.mat(C_CHROME, 0.3, 0.9).add(new THREE.CylinderGeometry(0.019, 0.019, 0.016, 14), TR(0.03 + dx, 0.757, ZR - 0.004, Math.PI / 2));
+    g.mat(C_CHROME, 0.45, 0.9).add(new THREE.CylinderGeometry(0.019, 0.019, 0.016, 14), TR(0.03 + dx, 0.757, ZR - 0.004, Math.PI / 2));
     g.mat(C_PIANO, 0.3).add(new THREE.CylinderGeometry(0.015, 0.015, 0.018, 14), TR(0.03 + dx, 0.757, ZR - 0.004, Math.PI / 2));
   }
   g.mat(0x09090a, 0.8).box(0.5, 0.004, 0.004, TR(0.47, 0.778, ZR - 0.004)).box(0.004, 0.16, 0.004, TR(0.22, 0.7, ZR - 0.022, 0.2)).box(0.004, 0.16, 0.004, TR(0.72, 0.7, ZR - 0.022, 0.2));
@@ -954,7 +955,7 @@ export function createCockpit(): Cockpit {
   const WC = V(-0.36, 0.87, -0.31), AX = V(0, Math.sin(24 * DEG), Math.cos(24 * DEG)), along = (d: number, x = 0, y = 0): V3 => WC.clone().addScaledVector(AX, d).add(V(x, y, 0));
   g.mat(C_DASH, 0.75); sweep(g, [along(-0.035), along(-0.16), along(-0.32)], V(1, 0, 0), [0.05, 0.062, 0.07], [0.043, 0.055, 0.06], 10, 3);
   for (const s of [-1, 1]) { g.mat(0x18191b, 0.6); sweep(g, [along(-0.085, s * 0.04), along(-0.09, s * 0.15, 0.008), along(-0.092, s * 0.215, 0.014)], V(0, 1, 0), [0.009, 0.009, 0.014], [0.009, 0.009, 0.012], 6); }
-  const sw = new GB().mat(C_LEATHER, 0.5);
+  const sw = new GB().mat(C_LEATHER, 0.62);
   sw.add(new THREE.TorusGeometry(0.169, 0.0165, 10, 40));
   const plate = new THREE.Shape();
   plate.moveTo(0.165, 0.032); plate.lineTo(0.165, -0.03); plate.quadraticCurveTo(0.1, -0.03, 0.065, -0.05); plate.quadraticCurveTo(0.03, -0.075, 0.024, -0.165);
@@ -966,7 +967,7 @@ export function createCockpit(): Cockpit {
   boss.quadraticCurveTo(0, -0.066, -0.03, -0.058); boss.quadraticCurveTo(-0.06, -0.04, -0.066, 0.015); boss.quadraticCurveTo(-0.07, 0.045, -0.05, 0.05);
   sw.mat(C_LEATHER, 0.7).add(new THREE.ExtrudeGeometry(boss, { depth: 0.014, bevelEnabled: true, bevelThickness: 0.008, bevelSize: 0.008, bevelSegments: 2, curveSegments: 5 }), TR(0, 0, -0.016));
   sw.mat(C_CHROME, 0.25, 0.9).add(new THREE.TorusGeometry(0.015, 0.0022, 5, 16), TR(0, 0, 0.007));
-  for (const s of [-1, 1]) sw.mat(0x0c0c0d, 0.45).box(0.05, 0.034, 0.004, TR(s * 0.108, 0, -0.0135)).mat(C_BAND, 0.4, 0.6).box(0.03, 0.006, 0.005, TR(s * 0.108, -0.024, -0.0135));
+  for (const s of [-1, 1]) sw.mat(0x0c0c0d, 0.75).box(0.05, 0.034, 0.004, TR(s * 0.108, 0, -0.0135)).mat(C_BAND, 0.4, 0.6).box(0.03, 0.006, 0.005, TR(s * 0.108, -0.024, -0.0135));
   const column = new THREE.Group(); column.position.copy(WC); column.rotation.x = -24 * DEG;
   const steeringWheel = new THREE.Object3D(); steeringWheel.add(mesh(sw)); column.add(steeringWheel);
 
@@ -1020,9 +1021,9 @@ export function createCockpit(): Cockpit {
   const MC = TR(0, 1.29, -0.32, 0.14, -0.325);
   g.mat(C_DASH, 0.6); sweep(g, [-0.128, -0.11, 0, 0.11, 0.128].map((x) => loc(MC, x, 0, -0.021)), dir(MC, 0, 0, 1), [0.008, 0.017, 0.02, 0.017, 0.008], [0.027, 0.038, 0.04, 0.038, 0.027], 8, 3);
   sweep(g, [loc(MC, 0, 0.012, -0.03), V(0, 1.325, -0.365), V(0, 1.345, -0.375)], V(1, 0, 0), 0.013, 0.013, 6);
-  const sM = st.keys[st.iCowl][0] + pl(st.keys[st.iCowl][0], st.bow) + 0.14, zM = z0 + sM, yM = beltY(zM) + 0.09;
+  const sM = st.keys[st.iCowl][0] + pl(st.keys[st.iCowl][0], st.bow) + 0.2, zM = z0 + sM, yM = beltY(zM) + 0.09;
   const side = (s: number): THREE.Mesh => {
-    const xb = doorX(zM, yM - 0.05), M = TR(s * (xb + 0.125), yM, zM + 0.03, -0.05, s < 0 ? 0.34 : -0.5);
+    const xb = doorX(zM, yM - 0.05), M = TR(s * (xb + 0.14), yM, zM + 0.03, -0.05, s < 0 ? 0.34 : -0.42);
     sweep(pb, [-0.085, -0.06, -0.025, -0.004].map((z) => loc(M, 0, 0, z)), dir(M, 1, 0, 0), [0.04, 0.085, 0.103, 0.103], [0.025, 0.052, 0.066, 0.066], 10, 3);
     g.mat(C_PIANO, 0.35); sweep(g, [loc(M, 0, 0, -0.012), loc(M, 0, 0, -0.0015)], dir(M, 1, 0, 0), 0.1045, 0.0675, 10, 3);
     g.mat(0x0e0e0f, 0.7); sweep(g, [loc(M, -s * 0.06, -0.05, -0.035), V(s * (xb - 0.01), yM - 0.07, zM - 0.02)], V(0, 0, 1), 0.024, 0.014, 6);

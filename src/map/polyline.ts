@@ -180,9 +180,10 @@ export function bezierLink(
   step = 1.0,
 ): Polyline {
   const dist = Math.hypot(x1 - x0, z1 - z0);
-  // distance de contrôle : plus longue pour les virages serrés afin d'arrondir
-  const dot = tx0 * tx1 + tz0 * tz1;
-  const k = dist * (0.34 + 0.12 * (1 - Math.max(-1, Math.min(1, dot))));
+  // distance de contrôle qui approche un arc de cercle : (4/3)·tan(θ/4)·R avec corde = 2R·sin(θ/2)
+  const dot = Math.max(-1, Math.min(1, tx0 * tx1 + tz0 * tz1));
+  const theta = Math.acos(dot);
+  const k = dist * (theta < 0.05 ? 1 / 3 : Math.min(0.62, ((4 / 3) * Math.tan(theta / 4)) / (2 * Math.sin(theta / 2))));
   const c0x = x0 + tx0 * k, c0z = z0 + tz0 * k;
   const c1x = x1 - tx1 * k, c1z = z1 - tz1 * k;
   const n = Math.max(2, Math.ceil((dist * 1.3) / step));

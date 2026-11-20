@@ -49,6 +49,8 @@ export class Vehicle {
   waiting = 0;
   /** le véhicule a dû freiner fort à cause du joueur alors qu'il était prioritaire */
   forcedByPlayer = 0;
+  /** temps passé arrêté derrière une carrosserie détectée par le filet géométrique */
+  netWait = 0;
   crashed = 0;
   alive = true;
   /** phase de roue pour le rendu */
@@ -235,6 +237,45 @@ export class Traffic {
       for (const o of this.byLane.get(v.link.to) ?? []) consider(remaining + o.s - o.length, o.v);
     }
 
+    // dans le carrefour : on laisse dégager le véhicule plus engagé sur une trajectoire qui coupe la nôtre
+    if (v.link) {
+      const fxv = Math.sin(v.heading), fzv = -Math.cos(v.heading);
+      const mine = v.s / Math.max(1, v.link.line.length);
+      for (const c of v.link.conflicts) {
+        for (const o of this.byLink.get(c) ?? []) {
+          const theirs = o.s / Math.max(1, c.line.length);
+          if (theirs < mine || (theirs === mine && o.id > v.id)) continue;
+          const rx = o.x - v.x, rz = o.z - v.z;
+          const ahead = rx * fxv + rz * fzv;
+          const d = Math.hypot(rx, rz);
+          if (ahead > 0 && d < (v.length + o.length) / 2 + 6) consider(Math.max(0.2, d - (v.length + o.length) / 2 - 0.8), Math.max(0, o.v * (Math.sin(o.heading) * fxv - Math.cos(o.heading) * fzv)));
+        }
+      }
+    }
+
+    // filet géométrique : carrosserie lente ou arrêtée en travers de notre couloir, que le suivi par
+    // élément ne voit pas (queue d'un véhicule qui dépasse sur l'élément précédent, liaisons voisines…)
+    // (patience limitée : au-delà, on se faufile comme le ferait un conducteur pour dégager le carrefour,
+    // ce qui évite les embouteillages circulaires)
+    let netGap = Infinity;
+    if (v.netWait < 7 + (v.id % 6)) {
+      for (const o of this.vehicles) {
+        if (o === v || o.v > 1.5) continue;
+        const ox = o.x - v.x, oz = o.z - v.z;
+        if (ox * ox + oz * oz > 16 * 16) continue;
+        const g = this.bodyGap(v, o);
+        if (g === Infinity) continue;
+        // face-à-face immobile : le plus petit identifiant se dégage
+        if (o.v < 0.3 && v.v < 0.3 && v.id < o.id && this.bodyGap(o, v) < Infinity) continue;
+        if (g < netGap) netGap = g;
+      }
+    }
+    // le filet ne compte que s'il est plus contraignant que le suivi normal
+    if (netGap < gap - 0.5) {
+      consider(netGap, 0);
+      if (v.v < 0.3) v.netWait += dt;
+    } else if (v.v > 2) v.netWait = 0;
+
     // voiture du joueur sur la trajectoire
     let playerAhead = Infinity;
     if (player) {
@@ -249,9 +290,25 @@ export class Traffic {
 
     // ── points d'arrêt sur la voie : feux, stop, cédez, passages piétons ──
     let mustStopAt = Infinity;
+    // passages piétons en sortie de carrefour
+    const exits = v.link ? v.link.exitCrossings : v.next ? v.next.exitCrossings : null;
+    if (exits) {
+      for (const x of exits) {
+        const d = (v.link ? 0 : remaining) + x.s - v.s * (v.link ? 1 : 0);
+        if (d > -0.5 && d < 60 && this.pedestrianOn(x.crossing, v)) mustStopAt = Math.min(mustStopAt, d);
+      }
+    }
     if (v.lane) {
       for (const sp of v.lane.stops) {
         const d = sp.s - v.s;
+        if (sp.kind === 'stop' && sp.atEnd) {
+          // l'arrêt compte même si la ligne a été un peu dépassée : sinon le véhicule attendrait indéfiniment
+          if (v.stoppedAtStop < 0.8 && d < 70) {
+            mustStopAt = Math.min(mustStopAt, Math.max(0, d));
+            if (d < 1.2 && v.v < 0.25) v.stoppedAtStop += dt;
+          }
+          continue;
+        }
         if (d < -1.5 || d > 70) continue;
         if (sp.kind === 'signal' && sp.controller) {
           const st = sp.controller.state(sp.group ?? 0, this.time);
@@ -259,11 +316,6 @@ export class Traffic {
           else if (st === 'yellow' && d > 0 && d > (v.v * v.v) / (2 * 3.2) + 1) mustStopAt = Math.min(mustStopAt, d);
         } else if (sp.kind === 'crossing' && sp.crossing) {
           if (d > -0.5 && this.pedestrianOn(sp.crossing, v)) mustStopAt = Math.min(mustStopAt, d);
-        } else if (sp.kind === 'stop' && sp.atEnd) {
-          if (v.stoppedAtStop < 0.8) {
-            mustStopAt = Math.min(mustStopAt, Math.max(0, d));
-            if (d < 1.2 && v.v < 0.25) v.stoppedAtStop += dt;
-          }
         }
       }
       // entrée de carrefour : priorités
@@ -317,6 +369,31 @@ export class Traffic {
       }
     }
     this.place(v);
+  }
+
+  /** Distance libre jusqu'à la carrosserie de `o` si elle empiète sur le couloir de `v` dans les 14 m (sinon ∞). */
+  private bodyGap(v: Vehicle, o: Vehicle): number {
+    const fx = Math.sin(o.heading), fz = -Math.cos(o.heading);
+    const r = o.width / 2;
+    const lim = v.width / 2 + r - 0.25;
+    let best = Infinity;
+    const test = (line: import('../map/polyline').Polyline, sFrom: number, offset: number) => {
+      if (offset > 14) return;
+      if (o.x < line.minX - 5 || o.x > line.maxX + 5 || o.z < line.minZ - 5 || o.z > line.maxZ + 5) return;
+      for (let k = -1; k <= 1; k++) {
+        const x = o.x + fx * o.length * 0.32 * k, z = o.z + fz * o.length * 0.32 * k;
+        const pr = line.project(x, z);
+        if (pr.s <= sFrom + 0.2 || pr.s >= line.length - 0.01 || Math.abs(pr.d) > lim) continue;
+        const g = offset + pr.s - sFrom - r;
+        if (g < 14 && g < best) best = g;
+      }
+    };
+    const L = v.path;
+    test(L, v.s, 0);
+    const rem = L.length - v.s;
+    if (v.lane && v.next) { test(v.next.line, 0, rem); test(v.next.to.line, 0, rem + v.next.line.length); }
+    else if (v.link) test(v.link.to.line, 0, rem);
+    return Math.max(0.1, best);
   }
 
   /** Distance libre jusqu'au joueur s'il se trouve sur la trajectoire (sinon ∞). */
@@ -402,7 +479,7 @@ export class Traffic {
   }
 
   /** L'usager venant par `oEnd` (liaison `oLink`) est-il prioritaire sur moi (`end`, `link`) ? */
-  private hasPriorityOver(oEnd: EdgeEnd, oLink: LaneLink | null, end: EdgeEnd, link: LaneLink, inX: number, inZ: number): boolean {
+  hasPriorityOver(oEnd: EdgeEnd, oLink: LaneLink | null, end: EdgeEnd, link: LaneLink, inX: number, inZ: number): boolean {
     const rank = { none: 2, signal: 2, yield: 1, stop: 0 } as const;
     const mine = rank[end.control], theirs = rank[oEnd.control];
     if (theirs > mine) return true;
@@ -446,6 +523,7 @@ export class Traffic {
   }
 
   // ───────────── piétons ─────────────
+  private pedWave = new Map<Crossing, { t: number; n: number }>();
   private populatePedestrians(player: PlayerInfo) {
     for (const p of this.pedestrians) if (Math.hypot(p.x - player.x, p.z - player.z) > 170) p.alive = false;
     if (this.pedestrians.length >= this.opts.pedestrians) return;
@@ -459,6 +537,11 @@ export class Traffic {
     for (let k = 0; k < 3 && this.pedestrians.length < this.opts.pedestrians; k++) {
       const c = this.rng.pick(near);
       if (this.pedestrians.filter((p) => p.crossing === c).length >= 3) continue;
+      // les piétons arrivent par petites vagues : après un groupe, le passage reste calme un moment,
+      // sinon un flux continu paralyse le carrefour
+      const w = this.pedWave.get(c);
+      if (w && this.time - w.t < 34 && (this.time - w.t > 5 || w.n >= 2)) continue;
+      if (!w || this.time - w.t >= 34) this.pedWave.set(c, { t: this.time, n: 1 }); else w.n++;
       this.spawnPedestrian(c);
     }
   }
@@ -473,15 +556,30 @@ export class Traffic {
     p.assertive = this.rng.next();
     // départ sur le trottoir, à quelques mètres du passage
     const half = c.edge.half + 1.0;
-    const along = startAtKerb ? 0 : this.rng.range(-9, 9);
+    const along = startAtKerb ? 0 : this.alongSidewalk(c, this.rng.range(-9, 9));
     const nx = -c.tz, nz = c.tx;
     const lat = p.side * (half + (startAtKerb ? 0 : this.rng.range(0.4, 1.6)));
-    p.x = c.x + c.tx * along + nx * lat;
-    p.z = c.z + c.tz * along + nz * lat;
+    // position prise le long de l'axe réel de la rue (qui peut être courbe)
+    const start = c.edge.line.atOffset(c.s + along, lat);
+    p.x = start.x; p.z = start.z;
     this.setTarget(p, c.x + nx * p.side * half + c.tx * this.rng.range(-c.halfLen * 0.6, c.halfLen * 0.6), c.z + nz * p.side * half + c.tz * this.rng.range(-c.halfLen * 0.6, c.halfLen * 0.6));
     p.state = 'approach';
     this.pedestrians.push(p);
     return p;
+  }
+
+  /**
+   * Déplacement le long du trottoir à partir d'un passage : borné pour ne jamais déborder sur
+   * la chaussée de la rue transversale (on reste entre les deux embouchures de la rue).
+   */
+  private alongSidewalk(c: Crossing, wanted: number): number {
+    const e = c.edge;
+    const lo = e.endA.trim + 2.5 - c.s, hi = e.length - e.endB.trim - 2.5 - c.s;
+    if (lo >= hi) return 0;
+    // si le sens voulu est bouché par le carrefour, on part de l'autre côté
+    if (wanted < lo && -wanted <= hi) wanted = -wanted;
+    else if (wanted > hi && -wanted >= lo) wanted = -wanted;
+    return clamp(wanted, Math.min(lo, 0), Math.max(hi, 0));
   }
 
   private setTarget(p: Pedestrian, x: number, z: number) {
@@ -542,8 +640,11 @@ export class Traffic {
         p.progress = clamp((half - lat * p.side) / (2 * half), 0, 1);
         if (dist < 0.3) {
           p.state = 'leave';
-          const along = this.rng.range(8, 22) * (this.rng.next() < 0.5 ? -1 : 1);
-          this.setTarget(p, p.x + c.tx * along - nx * p.side * this.rng.range(0.3, 1.2), p.z + c.tz * along - nz * p.side * this.rng.range(0.3, 1.2));
+          const along = this.alongSidewalk(c, this.rng.range(8, 22) * (this.rng.next() < 0.5 ? -1 : 1));
+          const out = this.rng.range(0.3, 1.2);
+          const k = (p.x - c.x) * c.tx + (p.z - c.z) * c.tz;
+          const goal = c.edge.line.atOffset(c.s + k + along, -p.side * (half + out));
+          this.setTarget(p, goal.x, goal.z);
         }
         break;
       }
@@ -567,7 +668,12 @@ export class Traffic {
       const along = rx * hx + rz * hz; // distance jusqu'au passage dans le sens de marche du véhicule
       const lat = Math.abs(rx * -hz + rz * hx);
       if (along < -3 || along > 60 || lat > c.edge.half + 2) return true;
-      if (speed < 0.5) return along > 3 || along < -1; // arrêté devant le passage : on passe
+      // un véhicule arrêté cède le passage ; il ne gêne que s'il est immobilisé sur le passage lui-même
+      // (mesuré dans le repère du passage : une voiture arrêtée dans la rue voisine ne compte pas)
+      if (speed < 0.5) {
+        const a = -(rx * c.tx + rz * c.tz), n = -(rx * -c.tz + rz * c.tx);
+        return Math.abs(a) > c.halfLen + 2.3 || Math.abs(n) > c.edge.half + 0.4;
+      }
       const eta = along / speed;
       // le véhicule doit pouvoir s'arrêter confortablement
       const stopDist = speed * 1.0 + (speed * speed) / (2 * 3.0);

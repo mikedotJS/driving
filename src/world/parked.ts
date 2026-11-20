@@ -12,40 +12,49 @@ interface Spot { x: number; z: number; heading: number; kind: CarKind; color: nu
 const KINDS: CarKind[] = ['citadine', 'berline', 'suv', 'utilitaire'];
 const PAINT_MARK = 0xff00fe;
 
-interface Baked { paint: THREE.BufferGeometry | null; rest: THREE.BufferGeometry | null }
+interface BakedPart { geo: THREE.BufferGeometry; mat: THREE.Material; tint: boolean }
 
-function bake(kind: CarKind): Baked {
+/** Fusionne un modèle de voiture en quelques géométries instanciables (peinture teintée par instance, détails, roues). */
+function bake(kind: CarKind, paintMat: THREE.Material): BakedPart[] {
   const v = createCarVisual(kind, PAINT_MARK);
   v.group.updateMatrixWorld(true);
-  const paint: THREE.BufferGeometry[] = [], rest: THREE.BufferGeometry[] = [];
   const mark = new THREE.Color(PAINT_MARK);
+  const groups = new Map<THREE.Material, THREE.BufferGeometry[]>();
   v.group.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
     const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial;
-    const g = m.geometry.clone();
+    let g = m.geometry.clone();
     g.applyMatrix4(m.matrixWorld);
-    // on ne garde que position / normale, plus une couleur par sommet
-    for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
-    const isPaint = mat.color && Math.abs(mat.color.r - mark.r) + Math.abs(mat.color.g - mark.g) + Math.abs(mat.color.b - mark.b) < 0.02;
+    if (g.index) g = g.toNonIndexed();
     const n = g.attributes.position.count;
-    const col = new Float32Array(n * 3);
-    const c = isPaint ? new THREE.Color(1, 1, 1) : mat.color ?? new THREE.Color(0.2, 0.2, 0.2);
-    // les matériaux émissifs éteints (feux) gardent leur teinte de base
-    for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    const gi = g.index ? g.toNonIndexed() : g;
-    (isPaint ? paint : rest).push(gi);
+    // attributs homogènes pour la fusion (les roues n'ont pas d'attribut de lueur)
+    if (!g.getAttribute('aGlow')) g.setAttribute('aGlow', new THREE.BufferAttribute(new Float32Array(n), 1));
+    else g.setAttribute('aGlow', new THREE.BufferAttribute(new Float32Array(n), 1));
+    if (!g.getAttribute('aRM')) { const rm = new Float32Array(n * 2); for (let i = 0; i < n; i++) rm[i * 2] = 0.5; g.setAttribute('aRM', new THREE.BufferAttribute(rm, 2)); }
+    if (!g.getAttribute('color')) { const c = new Float32Array(n * 3).fill(1); g.setAttribute('color', new THREE.BufferAttribute(c, 3)); }
+    for (const name of Object.keys(g.attributes)) if (!['position', 'normal', 'color', 'aRM', 'aGlow'].includes(name)) g.deleteAttribute(name);
+    let list = groups.get(mat);
+    if (!list) groups.set(mat, (list = []));
+    list.push(g);
   });
-  return { paint: paint.length ? mergeGeometries(paint) : null, rest: rest.length ? mergeGeometries(rest) : null };
+  const parts: BakedPart[] = [];
+  for (const [mat, list] of groups) {
+    const geo = mergeGeometries(list);
+    if (!geo) continue;
+    const col = (mat as THREE.MeshStandardMaterial).color;
+    const isPaint = !!col && Math.abs(col.r - mark.r) + Math.abs(col.g - mark.g) + Math.abs(col.b - mark.b) < 0.02;
+    if (isPaint) { geo.deleteAttribute('color'); geo.deleteAttribute('aRM'); geo.deleteAttribute('aGlow'); }
+    parts.push({ geo, mat: isPaint ? paintMat : mat, tint: isPaint });
+  }
+  return parts;
 }
 
 export class ParkedCars {
   private byChunk = new Map<string, Spot[]>();
   private grid = new Map<number, StaticBox[]>();
-  private baked = new Map<CarKind, Baked>();
-  private paintMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0.55, clearcoat: 1, clearcoatRoughness: 0.08, vertexColors: true });
-  private restMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.38, metalness: 0.25, vertexColors: true });
+  private baked = new Map<CarKind, BakedPart[]>();
+  private paintMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.42, metalness: 0.5, clearcoat: 1, clearcoatRoughness: 0.08 });
   count = 0;
 
   constructor(private net: RoadNet, density = 0.74) {
@@ -116,23 +125,20 @@ export class ParkedCars {
     for (const kind of KINDS) {
       const list = spots.filter((x) => x.kind === kind);
       if (!list.length) continue;
-      let b = this.baked.get(kind);
-      if (!b) this.baked.set(kind, (b = bake(kind)));
-      const mk = (geo: THREE.BufferGeometry | null, mat: THREE.Material, tint: boolean) => {
-        if (!geo) return;
-        const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+      let parts = this.baked.get(kind);
+      if (!parts) this.baked.set(kind, (parts = bake(kind, this.paintMat)));
+      for (const part of parts) {
+        const mesh = new THREE.InstancedMesh(part.geo, part.mat, list.length);
         list.forEach((sp, i) => {
           q.setFromAxisAngle(Y, -sp.heading);
           m.compose(p.set(sp.x, 0, sp.z), q, s);
           mesh.setMatrixAt(i, m);
-          if (tint) mesh.setColorAt(i, col.setHex(sp.color));
+          if (part.tint) mesh.setColorAt(i, col.setHex(sp.color));
         });
         mesh.castShadow = true; mesh.receiveShadow = true;
         mesh.computeBoundingSphere();
         holder.add(mesh);
-      };
-      mk(b.paint, this.paintMat, true);
-      mk(b.rest, this.restMat, false);
+      }
     }
     group.add(holder);
   }

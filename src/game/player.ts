@@ -217,9 +217,11 @@ export class Player {
     const nx = nlx * fx + nly * rx, nz = nlx * fz + nly * rz;
     const cx = ox + qx * fx + qy * rx, cz = oz + qx * fz + qy * rz;
     if (kind === 'pieton' && ped) {
+      // seule une voiture en mouvement renverse un piéton (un piéton qui frôle une voiture arrêtée ne compte pas)
       const [pvx, pvz] = c.pointVelocity(cx, cz);
-      const rel = Math.hypot(pvx - vx, pvz - vz);
-      if (rel > 0.6) { ped.hit = true; this.hit('pieton', rel); }
+      const own = Math.hypot(pvx, pvz);
+      const closing = -((pvx - vx) * nx + (pvz - vz) * nz);
+      if (own > 0.7 && closing > 0.5) { ped.hit = true; this.hit('pieton', own); }
       return; // un piéton n'arrête pas la voiture
     }
     this.resolve(nx, nz, depth, cx, cz, vx, vz, 'poteau');

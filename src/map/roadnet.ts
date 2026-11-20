@@ -49,7 +49,8 @@ export type Control = 'none' | 'signal' | 'stop' | 'yield';
 export type SignalState = 'green' | 'yellow' | 'red';
 export type Turn = 'left' | 'right' | 'straight';
 
-export const KERB_R = 3.2;
+/** rayon des bordures aux carrefours (identique à celui de tools/build-map.mjs) */
+export const KERB_R = 4.5;
 
 export class Vertex {
   ends: EdgeEnd[] = [];
@@ -143,6 +144,8 @@ export class Lane {
 
 export class LaneLink {
   conflicts: LaneLink[] = [];
+  /** passages piétons franchis en sortie de carrefour : abscisse d'arrêt sur la liaison */
+  exitCrossings: { crossing: Crossing; s: number }[] = [];
   constructor(
     public id: number, public from: Lane, public to: Lane, public vertex: Vertex,
     public line: Polyline, public turn: Turn,
@@ -332,12 +335,38 @@ export class RoadNet {
           if (th > 2.8) continue; // quasi alignées : pas de coin
           const s = Math.max(0.25, Math.sin(th));
           const d = (o.edge.half + e.edge.half * Math.cos(th)) / s;
+          // la voie s'arrête au point de tangence de l'arrondi de bordure : le virage est alors
+          // concentrique à la bordure et les roues arrière intérieures ne la coupent pas
           const fillet = KERB_R / Math.tan(Math.max(0.3, th / 2));
-          trim = Math.max(trim, d + fillet * 0.75);
+          trim = Math.max(trim, d + fillet);
         }
-        e.trim = clamp(trim, 1.5, Math.min(24, e.edge.length * 0.45));
+        e.trim = clamp(trim, 1.5, Math.min(26, e.edge.length * 0.45));
       }
       v.radius = Math.max(...v.ends.map((e) => e.trim));
+    }
+    // Sommets à deux branches où le profil en travers change : raccord progressif des voies
+    const offsets = (e: Edge, dir: 1 | -1): number[] => {
+      const o: number[] = [];
+      for (const st of e.strips) if (st.kind === 'L' && st.dir === dir) o.push(st.off * dir);
+      return o.sort((p, q) => p - q); // de gauche à droite dans le sens de circulation
+    };
+    for (const v of this.vertices) {
+      if (v.ends.length !== 2) continue;
+      const [a, b] = v.ends;
+      let shift = 0;
+      for (const [inE, outE] of [[a, b], [b, a]] as const) {
+        const ins = offsets(inE.edge, inE.atA ? -1 : 1), outs = offsets(outE.edge, outE.atA ? 1 : -1);
+        const n = ins.length, m = outs.length;
+        if (!n || !m) continue;
+        for (let i = 0; i < n; i++) shift = Math.max(shift, Math.abs(ins[i] - outs[n >= m ? Math.min(i, m - 1) : i + (m - n)]));
+      }
+      // changement de cap au passage du sommet
+      const dev = Math.abs(wrapAngle(b.heading - (a.heading + Math.PI)));
+      const need = Math.max(shift > 0.25 ? clamp(shift * 3.2, 2, 11) : 0, dev > 0.25 ? Math.min(9, 5.5 * Math.tan(dev / 2)) : 0);
+      if (need > 0) {
+        a.trim = Math.min(need, a.edge.length * 0.45);
+        b.trim = Math.min(need, b.edge.length * 0.45);
+      }
     }
   }
 
@@ -431,7 +460,10 @@ export class RoadNet {
           const dc = end.atA ? c.s : e.length - c.s;
           if (dc < end.trim + 16) stop = Math.max(stop, dc + c.halfLen + 1.2);
         }
-        if (end.control !== 'none' && end.stopDist > stop && end.stopDist < stop + 9) stop = end.stopDist;
+        // ligne reculée d'après la position du panneau dans OSM — sauf sur un tronçon court, où elle
+        // se retrouverait à la sortie du carrefour précédent
+        const usable = e.length - end.trim - end.other.trim;
+        if (end.control !== 'none' && end.stopDist > stop && end.stopDist < stop + 9 && end.stopDist - end.trim < usable * 0.4) stop = end.stopDist;
         end.stopDist = Math.min(stop, Math.max(end.trim + 0.4, e.length - end.other.trim - 3));
       }
     }
@@ -521,8 +553,10 @@ export class RoadNet {
         }
         for (const c of e.crossings) {
           const s = lane.fromEdgeS(c.s) - c.halfLen - 0.8;
-          if (s < -3 || s > lane.line.length + 1) continue;
-          lane.stops.push({ s: clamp(s, 0, lane.line.length), kind: 'crossing', crossing: c, atEnd: false });
+          // un passage situé avant le début de la voie (sortie de carrefour) est rattaché aux liaisons
+          if (s < -1) continue;
+          // au-delà de la fin de voie : il est dans l'embouchure du carrefour, on s'arrête en bout de voie
+          lane.stops.push({ s: clamp(s, 0, lane.line.length - 0.2), kind: 'crossing', crossing: c, atEnd: s > lane.line.length });
         }
         lane.stops.sort((p, q) => p.s - q.s);
       }
@@ -620,6 +654,10 @@ export class RoadNet {
     const b = to.line.at(0);
     const line = bezierLink(a.x, a.z, a.tx, a.tz, b.x, b.z, b.tx, b.tz, 0.8);
     const link = new LaneLink(this.links.length, from, to, v, line, turn, ang);
+    for (const c of to.edge.crossings) {
+      const s = to.fromEdgeS(c.s) - c.halfLen - 0.8; // négatif : avant le début de la voie d'arrivée
+      if (s < -1 && s > -(to.startRef.trim + 4)) link.exitCrossings.push({ crossing: c, s: Math.max(0.5, line.length + s) });
+    }
     this.links.push(link);
     from.links.push(link);
     to.inLinks.push(link);
@@ -666,7 +704,9 @@ export class RoadNet {
     const cand = this.edgesNear(x, z);
     for (const e of cand) {
       const p = e.line.project(x, z);
-      const dist = Math.abs(p.d) - e.half;
+      // en bout d'arête la projection est écrasée sur le sommet : il faut la vraie distance, pas le seul écart latéral
+      const clamped = p.s <= 0.01 || p.s >= e.length - 0.01;
+      const dist = (clamped ? Math.hypot(x - p.x, z - p.z) : Math.abs(p.d)) - e.half;
       let score = Math.max(dist, -1.5);
       if (heading !== undefined) {
         const eh = Math.atan2(p.tx, -p.tz);
@@ -674,8 +714,7 @@ export class RoadNet {
         if (da > Math.PI / 2) da = Math.PI - da; // sens indifférent
         score += da * 3.0;
       }
-      // en bout d'arête, la projection est écrasée sur le sommet : on pénalise
-      if (p.s <= 0.01 || p.s >= e.length - 0.01) score += 1.0;
+      if (clamped) score += 1.0;
       if (e === prefer) score -= 1.2;
       if (score < bestScore) {
         bestScore = score;

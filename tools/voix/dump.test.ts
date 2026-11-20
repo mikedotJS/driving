@@ -1,5 +1,5 @@
 // Exporte toutes les répliques du moniteur (clé → texte) pour l'enregistrement des voix :
-//   npx vitest run tools/voix/dump.test.ts
+//   npx vitest run --config tools/vitest.config.ts tools/voix/dump.test.ts
 import { it } from 'vitest';
 import { writeFileSync } from 'node:fs';
 import { INFRACTIONS } from '../../src/rules/infractions';
