@@ -80,6 +80,8 @@ export class Game implements MenuHost {
   private demo: Autopilot | null = null;
   private demoSteer = 0;
   private demoIndOff = 0;
+  /** fondu de la direction quand le moniteur rend le volant (s) */
+  private handover = 0;
   private recalcCooldown = 0;
   private postGrid = new Map<number, { x: number; z: number; r: number }[]>();
   private startPose: StartPose | null = null;
@@ -307,7 +309,7 @@ export class Game implements MenuHost {
     if (lesson.ready) P.handbrake = true;
 
     // itinéraire
-    this.route = null; this.follower = null; this.demo = null; this.hud.setDemo(false);
+    this.route = null; this.follower = null; this.demo = null; this.handover = 0; this.hud.setDemo(false);
     if (lesson.theme === 'examen') this.route = planExam(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, seed);
     else if (lesson.steps.some((st) => st.text === 'Suivez les indications du moniteur jusqu’à l’arrivée')) this.route = planRoute(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, lesson.theme, seed);
     if (this.route) this.follower = new RouteFollower(this.route);
@@ -465,6 +467,7 @@ export class Game implements MenuHost {
   private endDemo(text: string) {
     if (!this.demo) return;
     this.demo = null;
+    this.handover = 0.8;
     this.hud.setDemo(false);
     const c = this.player.car;
     // on rend la voiture dans la configuration choisie par l'élève
@@ -477,7 +480,15 @@ export class Game implements MenuHost {
   /** Remplace les commandes de l'élève par celles du moniteur pendant la démonstration. */
   private demoInput(dt: number, input: InputState): InputState {
     const ap = this.demo;
-    if (!ap) return input;
+    if (!ap) {
+      // le moniteur vient de rendre la main : la direction rejoint en douceur la position réelle du volant
+      if (this.handover > 0) {
+        this.handover = Math.max(0, this.handover - dt);
+        const k = this.handover / 0.8;
+        return { ...input, steer: input.steer + (this.demoSteer - input.steer) * k * k };
+      }
+      return input;
+    }
     const P = this.player;
     // l'élève reprend la main d'un coup de frein
     if (input.brake > 0.35) { this.endDemo('Vous reprenez la main.'); return input; }
