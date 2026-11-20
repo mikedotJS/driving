@@ -13,7 +13,12 @@ const C = map.chunk;
 const ringPath = (r, ox, oz, s = 0.01) => { let d = ''; for (let i = 0; i < r.length; i += 2) d += (i ? 'L' : 'M') + X(ox + r[i] * s) + ' ' + Z(oz + r[i + 1] * s); return d + 'Z'; };
 // espaces
 const AREA = { park: '#9fc48a', grass: '#b5d29c', wood: '#86b178', pitch: '#8fc7a0', water: '#9cc4e4', cemetery: '#b9c9a8', parking: '#bdbdbd', plaza: '#ddd6c6', dirt: '#c9b698' };
-for (const a of map.areas) svg += `<path d="${ringPath(a.p, 0, 0, 1)}" fill="${AREA[a.k] ?? '#ccc'}"/>`;
+for (const key of Object.keys(map.chunks)) {
+  const [ci, cj] = key.split(',').map(Number);
+  const ox = ci * C, oz = cj * C;
+  if (ox + C < x0 || oz + C < z0 || ox > x0 + size || oz > z0 + size) continue;
+  for (const a of map.chunks[key].a ?? []) svg += `<path d="${ringPath(a.o, ox, oz)}${(a.h ?? []).map((h) => ringPath(h, ox, oz)).join('')}" fill="${AREA[a.k] ?? '#ccc'}" fill-rule="evenodd"/>`;
+}
 for (const key of Object.keys(map.chunks)) {
   const [ci, cj] = key.split(',').map(Number);
   const ox = ci * C, oz = cj * C;
