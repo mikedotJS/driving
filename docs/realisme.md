@@ -63,7 +63,7 @@ circulation, avec la vraie physique ; le moniteur ne doit rien lui reprocher de 
 |---|---|
 | `npm test` : 5 leçons (feux, priorité, tournants, giratoire, grands axes) | 5 sur 5 sans faute grave ni accrochage |
 | `tools/essais/balayage.test.ts`, 48 trajets (6 thèmes × 8 tirages) | 48 terminés ; 47 sans faute grave ni accrochage ; aucun contact avec une bordure ; reste 1 accrochage à 18 km/h dans la Croix de Chavaux |
-| Circulation seule, 45 véhicules autour de la Croix de Chavaux pendant 6 min | arrêt le plus long 52 s, vitesse moyenne 17 km/h ; 3 chevauchements instantanés entre voitures. Sur cinq autres tirages : 2 à 10 chevauchements pour quatre d'entre eux, mais un embouteillage durable pour deux |
+| Circulation seule, 45 véhicules autour de la Croix de Chavaux pendant 6 min | arrêt le plus long 52 s, vitesse moyenne 17 km/h ; 3 chevauchements instantanés entre voitures. Sur cinq autres tirages : 2 à 10 chevauchements pour trois d'entre eux, mais un embouteillage de plus d'une minute pour les deux autres |
 
 Ces essais ont fait corriger plusieurs **fausses fautes** : refus de priorité signalé à une voiture
 arrêtée à sa ligne de stop, sens interdit dans une rue à sens unique tracée à l'envers, clignotant
