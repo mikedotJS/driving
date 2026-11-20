@@ -84,7 +84,7 @@ circulation, avec la vraie physique ; le moniteur ne doit rien lui reprocher de 
 |---|---|
 | `npm test` : 5 leçons (feux, priorité, tournants, giratoire, grands axes) | 5 sur 5 sans faute grave ni accrochage |
 | `npm run test:endurance` : 48 trajets (6 thèmes × 8 tirages), départ choisi comme dans le jeu | 48 sur 48 sans faute grave ni accrochage. Huit séries de 48 ont été parcourues (`BASE=101`, `500`, `900`, `1300`, `1700`, `2100`, `2500`, `2900`) : 384 trajets sur 384. Les trois premières ont servi à la mise au point ; les cinq autres n'ont été lancées qu'une fois, à la fin, sur des tirages jamais vus : 240 sur 240 |
-| Circulation seule autour de la Croix de Chavaux pendant 6 min, 12 tirages, à la densité du jeu (28 véhicules) | aucun chevauchement de carrosseries entre véhicules, sur les 12 tirages ; immobilisation la plus longue : 72 s (un véhicule qui laisse passer un cycle de feu) |
+| Circulation seule autour de la Croix de Chavaux pendant 6 min, 18 tirages, à la densité du jeu (28 véhicules) | 17 tirages sans aucun chevauchement de carrosseries entre véhicules, 1 tirage avec un seul chevauchement instantané ; immobilisation la plus longue : 72 s (un véhicule qui laisse passer un cycle de feu) |
 | Même essai à densité forcée (45 véhicules) | 1 chevauchement instantané au total sur les 12 tirages ; immobilisation la plus longue : 44 s |
 | `node tools/essais/navigateur.cjs` : six leçons guidées ouvertes par le menu dans la version compilée du jeu, démonstration du moniteur, 4 à 7 min simulées chacune | aucune erreur JavaScript, aucune faute, aucun choc, aucun chevauchement ; jusqu'à 30 véhicules et 8 réservations simultanées ; 1,1 à 1,9 km parcourus par leçon (4 arrivées, 2 encore en route à la fin du temps imparti) |
 
@@ -115,8 +115,9 @@ précédent. La circulation les traverse donc comme un seul carrefour : avant d'
 réserve tout son trajet jusqu'à la sortie, ainsi que sa place à la sortie (R415-2 : on ne s'engage pas
 si l'on risque de rester immobilisé). Deux trajets qui se croisent, se frôlent ou se rejoignent ne
 sont jamais réservés en même temps ; entre deux entrées concurrentes, celui qui attend depuis le plus
-longtemps passe d'abord, sauf priorité contraire. C'est ce qui a fait disparaître les chevauchements
-de carrosseries (jusqu'à 200 instants par essai sur certains tirages avant cette version).
+longtemps passe d'abord, sauf priorité contraire. C'est ce qui a fait pratiquement disparaître les
+chevauchements de carrosseries (jusqu'à 200 instants par essai sur certains tirages avant cette
+version ; un seul instant sur 18 essais désormais).
 
 **Égards envers l'élève.** Les autres véhicules le laissent s'insérer quand deux files se rejoignent
 en une seule ou qu'il met son clignotant vers leur voie ; nez à nez au milieu d'un carrefour, le

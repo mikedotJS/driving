@@ -102,8 +102,8 @@ les fausses fautes signalées à un élève qui conduit bien. Le balayage plus l
 48 trajets par série, départ choisi comme dans le jeu) a été parcouru sur huit séries : 384 trajets sur
 384 sans faute grave ni accrochage, dont 240 tirés une seule fois, à la fin, avec des graines jamais
 utilisées pendant la mise au point (`BASE=1300 npm run test:endurance` pour en rejouer une). Dans les
-grandes places comme la Croix de Chavaux, chaque véhicule réserve son trajet avant d'entrer : plus de
-carrosseries qui se chevauchent à la densité du jeu. Les mesures (physique comparée à une
+grandes places comme la Croix de Chavaux, chaque véhicule réserve son trajet avant d'entrer : les
+carrosseries ne se chevauchent pratiquement plus (un instant relevé sur 18 essais de 6 minutes). Les mesures (physique comparée à une
 citadine réelle, volant émulé, charge de rendu, captures) sont dans [`docs/realisme.md`](docs/realisme.md).
 
 ## Le décor
