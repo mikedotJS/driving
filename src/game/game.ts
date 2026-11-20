@@ -72,6 +72,11 @@ export class Game implements MenuHost {
   private menuCenter = { x: 1080, z: -480 };
   private viewRadius = 300;
   private fpsAcc = 0; private fpsN = 0; private fpsTimer = 0;
+  /** régulateur de fluidité : niveau d'allègement (0 = réglage choisi), compteurs de secondes lentes / rapides */
+  private perfLevel = 0; private perfLow = 0; private perfHigh = 0; private perfWall = 0; private perfFrames = 0;
+  /** dernière cadence mesurée (images par seconde réelles) */
+  fps = 0;
+  private perfFixed = new URLSearchParams(location.search).get('perf') === 'fixe';
   private hudTimer = 0;
   private audioReady = false;
   private lastInstruction = '';
@@ -170,10 +175,35 @@ export class Game implements MenuHost {
     return out;
   }
 
+  /**
+   * Régulateur de fluidité : mesure la cadence réelle et, si elle reste sous 40 images par seconde pendant
+   * 3 s de conduite, allège l'affichage d'un cran (résolution et distance de vue, rétroviseurs en dernier) ;
+   * après 25 s au-dessus de 57 images par seconde, il rétablit un cran.
+   */
+  private governor(elapsed: number) {
+    if (!(elapsed > 0) || elapsed > 5) return; // onglet en arrière-plan, premier appel
+    this.perfWall += elapsed; this.perfFrames++;
+    if (this.perfWall < 1) return;
+    this.fps = this.perfFrames / this.perfWall;
+    this.perfWall = 0; this.perfFrames = 0;
+    if (this.state !== 'drive' || !this.settings.autoQuality || this.perfFixed) { this.perfLow = this.perfHigh = 0; return; }
+    this.perfLow = this.fps < 40 ? this.perfLow + 1 : 0;
+    this.perfHigh = this.fps > 57 ? this.perfHigh + 1 : 0;
+    if (this.perfLow >= 3 && this.perfLevel < 3) {
+      this.perfLevel++; this.perfLow = 0;
+      this.applySettings();
+      this.hud.coach(this.perfLevel < 3 ? 'Affichage allégé pour garder la fluidité.' : 'Rétroviseurs coupés pour garder la fluidité : contrôlez en tournant la tête.', 'Réglable dans Réglages → Fluidité automatique', false, 5);
+    } else if (this.perfHigh >= 25 && this.perfLevel > 0) {
+      this.perfLevel--; this.perfHigh = 0;
+      this.applySettings();
+    }
+  }
+
   private applyPixelRatio() {
     const q = this.settings.quality;
     const dpr = window.devicePixelRatio || 1;
-    this.renderer.setPixelRatio(q === 'haute' ? Math.min(dpr, 2) : q === 'moyenne' ? Math.min(dpr, 1.25) : Math.min(dpr, 1));
+    const base = q === 'haute' ? Math.min(dpr, 2) : q === 'moyenne' ? Math.min(dpr, 1.25) : Math.min(dpr, 1);
+    this.renderer.setPixelRatio(base * [1, 0.85, 0.72, 0.6][this.perfLevel]);
   }
   private resize() {
     this.renderer.setSize(innerWidth, innerHeight, false);
@@ -263,10 +293,10 @@ export class Game implements MenuHost {
     if (this.player) this.player.car.mode = s.transmission;
     if (this.view) {
       this.view.fov = s.fov; this.view.lookIntoTurns = s.lookIntoTurns;
-      this.view.mirrorsEnabled = s.mirrors;
+      this.view.mirrorsEnabled = s.mirrors && this.perfLevel < 3;
       this.view.mirrorRate = s.quality === 'haute' ? 3 : 1;
     }
-    this.viewRadius = s.quality === 'haute' ? 380 : s.quality === 'moyenne' ? 300 : 220;
+    this.viewRadius = (s.quality === 'haute' ? 380 : s.quality === 'moyenne' ? 300 : 220) * [1, 0.82, 0.68, 0.58][this.perfLevel];
     if (this.renderer) this.applyPixelRatio(), this.renderer.setSize(innerWidth, innerHeight, false);
     if (this.traffic) {
       const tc = TRAFFIC_COUNTS[s.traffic];
@@ -566,6 +596,7 @@ export class Game implements MenuHost {
   private frame(now: number) {
     requestAnimationFrame((t) => this.frame(t));
     const dt = clamp((now - this.lastTime) / 1000, 0.001, 0.05);
+    this.governor((now - this.lastTime) / 1000);
     this.lastTime = now;
     this.time += dt;
     this.controls.speedHint = this.player.car.vx;

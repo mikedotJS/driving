@@ -31,21 +31,28 @@ rampage en boîte automatique, immobilité parfaite à l'arrêt, rappel du volan
 ## 2. Le volant Logitech G923
 
 Aucun volant n'était branché à la machine de développement. La chaîne complète est donc vérifiée
-avec un **G923 émulé** (`tests/volant.test.ts`, 9 tests) :
+avec un **G923 émulé** (`tests/volant.test.ts`, 10 tests) :
 
 - un faux périphérique *Gamepad* : reconnaissance du volant, direction 1:1 sur 900°, pédales
   (repos à +1, zone morte), palettes, levier en H, assistant de calibration quel que soit l'ordre des
   axes, profil mémorisé ;
-- un faux périphérique *WebHID* qui enregistre les trames envoyées :
-  - G923 PlayStation/PC (046d:c266) : `F5` (centrage coupé), `F8 81 84 03` (900°),
-    `11 08 <niveau> 80` (effort constant, `80` = neutre), `13` (effort nul) — le format du pilote
-    Linux `hid-lg4ff.c`, tel que je le connais (son code source n'a pas été relu pendant ce travail) ;
-  - G923 Xbox/PC (046d:c26e) : HID++, recherche de la fonctionnalité `0x8123`, remise à zéro, gains,
-    effet constant à démarrage automatique mis à jour à chaque image — la séquence du pilote Linux
-    `hid-logitech-hidpp.c`, sous la même réserve.
+- un faux périphérique *WebHID* qui enregistre les trames envoyées. Le code source des pilotes Linux a
+  été relu pour fixer les trames attendues :
+  - **G923 PlayStation/PC** : le pilote officiel `hid-lg4ff.c` ne connaît pas ce volant ; c'est le
+    pilote communautaire [new-lg4ff](https://github.com/berarma/new-lg4ff) qui le prend en charge
+    (046d:c266 en mode natif, 046d:c267 en mode PlayStation). Le jeu envoie les mêmes commandes :
+    `F5` (centrage coupé), `F8 81 84 03` (rotation 900°), `11 00 <niveau>` pour lancer l'effort
+    constant, `1C 00 <niveau>` pour le rafraîchir, `13` pour l'arrêter (`80` = neutre). En mode
+    PlayStation, il demande d'abord le passage en mode natif (rapport `30` : `F8 09 07 01 01`),
+    après quoi le volant se reconnecte et doit être autorisé de nouveau ;
+  - **G923 Xbox/PC** (046d:c26e) : protocole HID++ de `hid-logitech-hidpp.c` — fonctionnalité `0x8123`,
+    remise à zéro (`11`), gains (`81`), effet constant à démarrage automatique téléchargé par la
+    fonction `21`, force sur 16 bits aux octets 6 et 7 des paramètres.
 
-Ce qui reste invérifiable sans matériel : le **sens** de l'effort (une case « Inverser » et un bouton
-« Tester » sont prévus pour cela) et le ressenti.
+Ce qui reste invérifiable sans matériel : le **sens** de l'effort — aucun des deux pilotes n'indique de
+quel côté de la valeur neutre le volant part à droite ; une case « Inverser » et un bouton « Tester »
+sont prévus pour cela —, l'acceptation par le navigateur du rapport `30` de changement de mode, et le
+ressenti.
 
 ## 3. Le Code de la route
 
@@ -89,10 +96,17 @@ réglage de qualité par défaut :
 | Triangles par image | ≈ 1,3 million |
 | Textures / géométries en mémoire | 38 / 215 |
 
-Le nombre d'images par seconde n'a **pas** pu être mesuré : la machine de développement n'a pas de
-carte graphique (rendu logiciel). À titre indicatif, 170 appels et 1,3 million de triangles sont une
-charge modeste pour une carte graphique dédiée récente ; les réglages « Affichage » permettent de
-réduire ombres, rétroviseurs et distance de vue.
+Le nombre d'images par seconde sur une carte graphique n'a **pas** pu être mesuré : la machine de
+développement n'en a pas (rendu logiciel SwiftShader sur 4 cœurs, où le jeu tourne à 0,24 image par
+seconde — chiffre sans rapport avec un vrai GPU). 170 appels et 1,3 million de triangles sont une
+charge modeste pour une carte graphique dédiée récente.
+
+Pour ne pas dépendre de cette mesure, le jeu **se règle lui-même** : un régulateur mesure la cadence
+réelle et, si elle reste sous 40 images par seconde pendant 3 s, allège l'affichage d'un cran
+(résolution, distance de vue, puis rétroviseurs en dernier recours) ; il rétablit un cran après 25 s
+au-dessus de 57 images par seconde. Vérifié dans le navigateur : sur le rendu logiciel, il descend au
+dernier cran et la cadence mesurée passe de 0,24 à 0,67 image par seconde. Il se désactive dans
+*Réglages → Fluidité automatique* (ou avec `?perf=fixe` dans l'adresse).
 
 ## 6. Captures
 

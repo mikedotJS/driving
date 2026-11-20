@@ -29,12 +29,13 @@ Pour une version optimisée : `npm run build` puis `npm run preview`.
    Cliquez sur *Tester* : le volant doit partir vers la droite, sinon cochez « Inverser ».
 
 > Le retour de force **n'a pas pu être essayé sur un volant réel** depuis l'environnement de
-> développement. Il est vérifié avec un G923 émulé : les trames envoyées sont comparées, octet par
-> octet, au format des pilotes Linux de référence tel que je le connais, sans avoir relu leur code
-> source (trames classiques du G29/G923 PlayStation, HID++ du G920/G923 Xbox — voir
-> `tests/volant.test.ts`). Restent à confirmer sur le matériel le sens de
-> l'effort (case « Inverser ») et le ressenti : commencez avec une force modérée. Sans retour de
-> force, le volant fonctionne avec le ressort de centrage de G HUB.
+> développement. Il est vérifié avec un G923 émulé : les trames envoyées sont celles des pilotes Linux,
+> dont le code source a été relu ([new-lg4ff](https://github.com/berarma/new-lg4ff) pour le G923
+> PlayStation/PC, `hid-logitech-hidpp.c` pour le G923 Xbox — voir `tests/volant.test.ts`). Si le volant
+> est en mode PlayStation, le jeu demande le passage en mode natif : il se reconnecte, cliquez de
+> nouveau sur *Connecter le volant*. Reste à confirmer sur le matériel le **sens** de l'effort, qu'aucun
+> pilote n'indique (case « Inverser »), et le ressenti : commencez avec une force modérée. Sans retour
+> de force, le volant fonctionne avec le ressort de centrage de G HUB.
 
 Sans volant, le jeu se pilote au clavier (AZERTY) ou à la manette — voir *Commandes et aide*.
 
@@ -145,7 +146,8 @@ dev/              pages de mise au point de modules isolés
   la circulation ne changent pas de file.
 - Quelques carrefours très serrés demandent de bien élargir sa trajectoire pour ne pas toucher la
   bordure ; les itinéraires de leçon évitent les épingles impraticables.
-- Le nombre d'images par seconde n'a pas été mesuré sur une vraie carte graphique.
+- Le nombre d'images par seconde n'a pas été mesuré sur une vraie carte graphique ; le jeu allège
+  de lui-même l'affichage quand la cadence chute (*Réglages → Fluidité automatique*).
 - Ce simulateur est un outil d'entraînement : **il ne remplace pas les leçons avec un enseignant diplômé**.
 
 ## Crédits et licences

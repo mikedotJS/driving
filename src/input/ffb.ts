@@ -2,12 +2,17 @@
 //
 // Deux protocoles :
 //  • « classique » (G25/G27/G29, G923 version PlayStation/PC) : trames de 7 octets, effet de force
-//    variable dans l'emplacement 0, ressort de centrage matériel désactivé ;
-//  • HID++ 4.2, fonctionnalité 0x8123 (G920, G923 version Xbox/PC) : effet « constant » téléchargé
-//    puis mis à jour en continu.
+//    constante dans l'emplacement 1 (11 00 <niveau> pour le lancer, 1c 00 <niveau> pour le rafraîchir,
+//    13 pour l'arrêter ; 0x80 = neutre), ressort de centrage matériel désactivé (f5), rotation réglée
+//    à 900° (f8 81 …). Format relu dans le pilote Linux new-lg4ff, qui prend en charge le G923
+//    (046d:c266 en mode natif ; en mode PlayStation, 046d:c267, il faut d'abord demander le mode natif
+//    par le rapport 0x30 : f8 09 07 01 01) ;
+//  • HID++ 4.2, fonctionnalité 0x8123 (G920, G923 version Xbox/PC, 046d:c26e) : effet « constant »
+//    téléchargé (fonction 0x21) puis mis à jour en continu — relu dans hid-logitech-hidpp.c.
 // Seul un couple constant est envoyé : amortissement, frottements, butées et vibrations sont
 // calculés par le simulateur. N'a pas pu être essayé sur un volant réel depuis l'environnement de
-// développement : un test (« le volant doit partir à droite ») et une option d'inversion sont prévus.
+// développement, et aucun pilote n'indique de quel côté de 0x80 le volant part à droite : un test
+// (« le volant doit partir à droite ») et une option d'inversion sont prévus pour cela.
 
 import { clamp } from '../core/math';
 
@@ -36,6 +41,8 @@ export class ForceFeedback {
 
   private device: HIDDevice | null = null;
   private reportId = 0;
+  /** protocole classique : l'effet constant de l'emplacement 1 est-il lancé ? */
+  private slotOn = false;
   private busy = false;
   private last = 0;
   private lastSent = 999;
@@ -100,7 +107,16 @@ export class ForceFeedback {
         const rep = outs.find((r) => (r.items ?? []).reduce((s, it) => s + ((it.reportSize ?? 0) * (it.reportCount ?? 0)) / 8, 0) >= 7) ?? outs[0];
         if (!rep && outs.length === 0 && d.collections.length === 0) return false;
         this.reportId = rep?.reportId ?? 0;
-        this.device = d; this.protocol = 'classic';
+        if (d.productId === 0xc267) {
+          // G923 en mode « PlayStation » : pas de retour de force dans ce mode. On demande le passage en mode
+          // natif (commande du pilote new-lg4ff, rapport 0x30) ; le volant se déconnecte puis revient sous
+          // l'identifiant 046d:c266, qu'il faut alors autoriser à son tour.
+          await d.sendReport(0x30, new Uint8Array([0xf8, 0x09, 0x07, 0x01, 0x01, 0x00, 0x00]));
+          this.status = 'déconnecté';
+          this.lastError = 'Le volant passe en mode natif : il se reconnecte dans un instant. Cliquez de nouveau sur « Connecter le volant ».';
+          return false;
+        }
+        this.device = d; this.protocol = 'classic'; this.slotOn = false;
         await this.sendClassic([0xf5, 0, 0, 0, 0, 0, 0]);          // coupe le ressort de centrage matériel
         await this.sendClassic([0xf8, 0x81, 900 & 0xff, 900 >> 8, 0, 0, 0]); // plage de rotation 900°
         await this.sendClassic([0x13, 0, 0, 0, 0, 0, 0]);           // aucun effort
@@ -174,7 +190,10 @@ export class ForceFeedback {
     if (this.protocol === 'classic') {
       // 0x80 = neutre ; valeurs inférieures = effort vers la droite
       const level = clamp(Math.round(0x80 - f * 127), 1, 255);
-      p = level === 0x80 ? this.sendClassic([0x13, 0, 0, 0, 0, 0, 0]) : this.sendClassic([0x11, 0x08, level, 0x80, 0, 0, 0]);
+      // effort constant dans l'emplacement 1, comme le pilote new-lg4ff (qui gère le G923) : 0x11 = charger
+      // et lancer, 0x1c = rafraîchir la force, 0x13 = arrêter
+      if (level === 0x80) { p = this.sendClassic([0x13, 0, 0, 0, 0, 0, 0]); this.slotOn = false; }
+      else { p = this.sendClassic([this.slotOn ? 0x1c : 0x11, 0x00, level, 0, 0, 0, 0]); this.slotOn = true; }
     } else {
       const v = Math.round(clamp(-f, -1, 1) * 32767) & 0xffff;
       const buf = new Uint8Array(19);
@@ -191,7 +210,7 @@ export class ForceFeedback {
     const d = this.device;
     if (!d) return;
     try {
-      if (this.protocol === 'classic') void d.sendReport(this.reportId, new Uint8Array([0x13, 0, 0, 0, 0, 0, 0]));
+      if (this.protocol === 'classic') { this.slotOn = false; void d.sendReport(this.reportId, new Uint8Array([0x13, 0, 0, 0, 0, 0, 0])); }
       else if (this.protocol === 'hidpp') {
         const buf = new Uint8Array(19);
         buf[0] = 0xff; buf[1] = this.ffIndex; buf[2] = (0x2 << 4) | 0x01; buf[3] = this.slot; buf[4] = 0x80;

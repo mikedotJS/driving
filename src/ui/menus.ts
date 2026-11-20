@@ -146,6 +146,7 @@ export class Menus {
     );
     const jeu = h('div', null,
       field('Qualité d’affichage', 'Ombres, résolution, distance d’affichage.', select(s.quality, [['basse', 'Basse'], ['moyenne', 'Moyenne'], ['haute', 'Haute']], (v) => { s.quality = v; })),
+      field('Fluidité automatique', 'Sous 40 images par seconde, le jeu réduit de lui-même la résolution et la distance d’affichage (puis les rétroviseurs en dernier recours), et les rétablit quand la cadence remonte.', check(s.autoQuality, (v) => { s.autoQuality = v; })),
       field('Rétroviseurs', 'Trois rétroviseurs calculés en temps réel (coûteux sur les petites cartes graphiques).', check(s.mirrors, (v) => { s.mirrors = v; })),
       field('Champ de vision', '', range(s.fov, 40, 85, 1, (v) => { s.fov = v; }, (v) => `${v}°`)),
       field('Regard vers l’intérieur des virages', 'La tête accompagne le volant, utile sur un seul écran.', range(s.lookIntoTurns, 0, 1, 0.05, (v) => { s.lookIntoTurns = v; }, (v) => `${Math.round(v * 100)} %`)),

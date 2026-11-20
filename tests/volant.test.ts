@@ -1,7 +1,8 @@
 // Chaîne « volant » vérifiée sans matériel : un Logitech G923 émulé (objet Gamepad et périphérique
-// WebHID factices). Les trames de retour de force attendues suivent le format des pilotes Linux de
-// référence (hid-lg4ff.c pour le G29/G923 PlayStation, hid-logitech-hidpp.c pour le G920/G923 Xbox),
-// restitué de mémoire : leur code source n'a pas été relu, et rien n'a été essayé sur un vrai volant.
+// WebHID factices). Les trames de retour de force attendues sont celles des pilotes Linux, dont le code
+// source a été relu le 20 novembre 2026 : new-lg4ff (berarma) pour le G923 PlayStation/PC — le pilote
+// officiel hid-lg4ff.c ne connaît pas ce volant —, hid-logitech-hidpp.c pour le G923 Xbox.
+// Rien n'a été essayé sur un vrai volant : le sens de l'effort, notamment, n'est indiqué par aucun pilote.
 import { describe, it, expect, beforeEach } from 'vitest';
 
 // ── faux environnement de navigateur ──
@@ -150,7 +151,7 @@ function fakeHid(productId: number, reportId: number) {
 const tick = (ms = 12) => new Promise((r) => setTimeout(r, ms));
 
 describe('Logitech G923 émulé : retour de force', () => {
-  it('G923 PlayStation (046d:c266) : trames « classiques » identiques à celles du pilote Linux lg4ff', async () => {
+  it('G923 PlayStation/PC en mode natif (046d:c266) : trames « classiques », format du pilote new-lg4ff', async () => {
     const { dev, sent } = fakeHid(0xc266, 0);
     hidDevices = [dev];
     const ffb = new ForceFeedback();
@@ -165,21 +166,21 @@ describe('Logitech G923 émulé : retour de force', () => {
     await tick();
     ffb.setForce(0.5);
     await tick();
-    // effort constant dans l'emplacement 1 : 0x11 0x08 <niveau> 0x80, niveau 0x80 = neutre
-    expect(sent[3].data).toEqual([0x11, 0x08, Math.round(0x80 - 0.5 * 127), 0x80, 0, 0, 0]);
+    // effort constant dans l'emplacement 1 : 11 00 <niveau> pour charger et lancer, niveau 0x80 = neutre
+    expect(sent[3].data).toEqual([0x11, 0x00, Math.round(0x80 - 0.5 * 127), 0, 0, 0, 0]);
     expect(sent[3].data[2]).toBeLessThan(0x80);
     ffb.setForce(-1);
     await tick();
-    expect(sent[4].data).toEqual([0x11, 0x08, 0xff, 0x80, 0, 0, 0]);
+    expect(sent[4].data).toEqual([0x1c, 0x00, 0xff, 0, 0, 0, 0]); // 1c = rafraîchissement de la force
     ffb.setForce(0);
     await tick();
-    expect(sent[5].data).toEqual([0x13, 0, 0, 0, 0, 0, 0]); // effort nul = effet désactivé
+    expect(sent[5].data).toEqual([0x13, 0, 0, 0, 0, 0, 0]); // effort nul = effet arrêté
 
-    // réglages : gain et inversion
+    // réglages : gain et inversion (l'effet, arrêté, est relancé par 0x11)
     ffb.settings.gain = 0.5; ffb.settings.invert = true;
     ffb.setForce(1);
     await tick();
-    expect(sent[6].data).toEqual([0x11, 0x08, Math.round(0x80 + 0.5 * 127), 0x80, 0, 0, 0]);
+    expect(sent[6].data).toEqual([0x11, 0x00, Math.round(0x80 + 0.5 * 127), 0, 0, 0, 0]);
     expect(sent[6].data[2]).toBeGreaterThan(0x80); // sens inversé, demi-gain
     // coupure à la pause
     ffb.stop();
@@ -210,6 +211,18 @@ describe('Logitech G923 émulé : retour de force', () => {
     expect(f.slice(0, 5)).toEqual([0xff, 0x0b, 0x21, 1, 0x80]);
     const force = ((f[9] << 8) | f[10]) << 16 >> 16;
     expect(Math.abs(Math.abs(force) - 0.5 * 32767)).toBeLessThanOrEqual(1);
+  });
+
+  it('G923 en mode PlayStation (046d:c267) : demande de passage en mode natif, puis reconnexion', async () => {
+    const { dev, sent } = fakeHid(0xc267, 0);
+    hidDevices = [dev];
+    const ffb = new ForceFeedback();
+    expect(await ffb.connect()).toBe(false);
+    // commande de changement de mode du pilote new-lg4ff : rapport 0x30, F8 09 07 01 01
+    expect(sent[0]).toEqual({ id: 0x30, data: [0xf8, 0x09, 0x07, 0x01, 0x01, 0x00, 0x00] });
+    expect(sent.length).toBe(1);
+    expect(ffb.connected).toBe(false);
+    expect(ffb.lastError).toContain('mode natif');
   });
 
   it('un périphérique Logitech qui n’est pas un volant à retour de force est refusé proprement', async () => {

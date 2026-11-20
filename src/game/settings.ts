@@ -9,6 +9,8 @@ export interface Settings {
   traffic: 'faible' | 'normal' | 'dense';
   quality: 'basse' | 'moyenne' | 'haute';
   mirrors: boolean;
+  /** allège automatiquement l'affichage quand la cadence d'images chute */
+  autoQuality: boolean;
   fov: number;
   lookIntoTurns: number;
   volume: number;
@@ -25,7 +27,7 @@ export interface Settings {
 }
 
 export const DEFAULTS: Settings = {
-  transmission: 'manual', transmissionAuto: true, traffic: 'normal', quality: 'moyenne', mirrors: true, fov: 60, lookIntoTurns: 0.55,
+  transmission: 'manual', transmissionAuto: true, traffic: 'normal', quality: 'moyenne', mirrors: true, autoQuality: true, fov: 60, lookIntoTurns: 0.55,
   volume: 0.8, voice: true, hud: true, minimap: true, strict: false, wheelRange: 900, brakeGamma: 1, hShifter: false, progress: {},
 };
 
