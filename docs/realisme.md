@@ -49,9 +49,10 @@ Ce qui reste invérifiable sans matériel : le **sens** de l'effort (une case «
 
 ## 3. Le Code de la route
 
-Voir la section 7 de [`code-de-la-route-recherche.md`](code-de-la-route-recherche.md) : barème
-recoupé le 20 novembre 2026 avec les fiches de service-public, figé par `tests/bareme.test.ts`
-(32 tests).
+Voir la section 7 de [`code-de-la-route-recherche.md`](code-de-la-route-recherche.md) : chaque
+article du barème a été relu le 20 novembre 2026 dans le texte officiel (base LEGI publiée par la
+DILA, script `tools/bareme/verifier-legi.py`) et les montants sur les fiches de service-public ;
+aucune valeur n'a dû être corrigée. `tests/bareme.test.ts` fige le tout (32 tests).
 
 ## 4. Un élève qui conduit bien n'est pas sanctionné à tort
 
@@ -61,12 +62,14 @@ circulation, avec la vraie physique ; le moniteur ne doit rien lui reprocher de 
 | Essai | Résultat |
 |---|---|
 | `npm test` : 5 leçons (feux, priorité, tournants, giratoire, grands axes) | 5 sur 5 sans faute grave ni accrochage |
-| `tools/essais/balayage.test.ts`, 48 trajets (6 thèmes × 8 tirages) | 48 terminés ; 45 sans faute grave ni accrochage ; restent 2 accrochages à moins de 15 km/h et 1 contact de trottoir (rue Molière) |
-| Circulation seule, 45 véhicules autour de la Croix de Chavaux pendant 6 min | arrêt le plus long 97 s, vitesse moyenne 14 km/h ; 33 chevauchements brefs entre voitures relevés dans ce très grand carrefour (défaut visuel connu) |
+| `tools/essais/balayage.test.ts`, 48 trajets (6 thèmes × 8 tirages) | 48 terminés ; 47 sans faute grave ni accrochage ; aucun contact avec une bordure ; reste 1 accrochage à 18 km/h dans la Croix de Chavaux |
+| Circulation seule, 45 véhicules autour de la Croix de Chavaux pendant 6 min | arrêt le plus long 52 s, vitesse moyenne 17 km/h ; 3 chevauchements instantanés entre voitures. Sur cinq autres tirages : 2 à 10 chevauchements pour quatre d'entre eux, mais un embouteillage durable pour deux |
 
 Ces essais ont fait corriger plusieurs **fausses fautes** : refus de priorité signalé à une voiture
 arrêtée à sa ligne de stop, sens interdit dans une rue à sens unique tracée à l'envers, clignotant
-exigé avant un carrefour impossible à anticiper, ligne de stop placée 11 m trop tôt.
+exigé avant un carrefour impossible à anticiper, ligne de stop placée 11 m trop tôt, ligne de feu
+décalée de plusieurs mètres dans les rues courbes, autobus qui balayait la voie voisine en tournant.
+Les itinéraires de leçon ne sont retenus que si chaque virage est praticable sans toucher une bordure.
 
 ## 5. Charge de rendu
 

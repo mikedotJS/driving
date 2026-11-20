@@ -556,7 +556,7 @@ export class Autopilot {
     // instant où notre avant atteindra un point situé à la distance d (au démarrage : accélération douce)
     const arrival = (d: number) => (v > 1.2 ? d / v : Math.sqrt((2 * d) / 1.6) + 0.4);
     for (const o of tr.vehicles) {
-      if (o.v < 1.5) continue;
+      if (o.v < 0.6) continue;
       const dx = o.x - car.x, dz = o.z - car.z;
       if (dx * dx + dz * dz > 40 * 40) continue;
       // ne concerne que ceux qui roulent en travers de notre route (pas ceux qui nous précèdent ou nous croisent en face)
@@ -572,7 +572,7 @@ export class Autopilot {
             const pr = L.project(q.x, q.z);
             const d = acc + pr.s;
             // même endroit, au même moment (à une longueur de voiture près)
-            if (Math.abs(pr.d) < 1.9 && pr.s > 0.01 && pr.s < L.length - 0.01 && d > 1 && d < 30 && Math.abs(arrival(d) - t) < 1.7 && d < best) best = d;
+            if (Math.abs(pr.d) < 1.9 && pr.s > 0.01 && pr.s < L.length - 0.01 && d > 1 && d < 30 && (o.v < 3 ? arrival(d) < t + 3.5 : Math.abs(arrival(d) - t) < 1.7) && d < best) best = d; // (un véhicule lent occupe longtemps la zone de croisement)
           }
           acc += L.length;
         }

@@ -4,7 +4,7 @@
 // État du droit : novembre 2026 (voir docs/code-de-la-route-recherche.md pour les sources).
 // Points notables : aucun retrait de point pour un excès inférieur à 5 km/h depuis le 1er janvier
 // 2024 (décret n° 2023-1150) ; excès d'au moins 50 km/h constitutif d'un délit depuis le
-// 29 décembre 2025 (loi n° 2025-622, décret n° 2025-1269) ; refus de priorité à un piéton : 6 points.
+// fin décembre 2025 (loi n° 2025-622, décret n° 2025-1269 ; version de l’article L413-1 datée du 31 décembre dans la base LEGI) ; refus de priorité à un piéton : 6 points.
 
 /** Compétences de la grille d'examen (CEPC) auxquelles la faute est rattachée. */
 export type Competence =
@@ -79,7 +79,7 @@ export const INFRACTIONS = {
     id: 'vitesse_delit', titre: 'Grand excès de vitesse (50 km/h et plus)', article: 'L413-1', classe: 6, amende: 300, points: 6, suspension: true,
     severity: 'grave', competence: 'allure', cooldown: 20,
     moniteur: 'Grand excès de vitesse : c’est un délit. Arrêtez-vous.',
-    regle: 'Depuis le 29 décembre 2025, dépasser la vitesse autorisée de 50 km/h ou plus est un délit dès la première fois : jusqu’à 3 mois d’emprisonnement et 3 750 € d’amende (amende forfaitaire délictuelle de 300 €), 6 points, suspension et confiscation possibles.',
+    regle: 'Depuis fin décembre 2025, dépasser la vitesse autorisée de 50 km/h ou plus est un délit dès la première fois : jusqu’à 3 mois d’emprisonnement et 3 750 € d’amende (amende forfaitaire délictuelle de 300 €), 6 points, suspension et confiscation possibles.',
   }),
   vitesse_inadaptee: I({
     id: 'vitesse_inadaptee', titre: 'Vitesse inadaptée aux circonstances', article: 'R413-17', classe: 4, amende: 135, points: 0,
@@ -257,7 +257,7 @@ export const INFRACTIONS = {
     id: 'feux', titre: 'Circulation sans éclairage', article: 'R416-11', classe: 4, amende: 135, points: 4, suspension: true,
     severity: 'faute', competence: 'installation', cooldown: 40,
     moniteur: 'Allumez vos feux de croisement.',
-    regle: 'De nuit ou par visibilité insuffisante, on circule feux de croisement allumés. 135 €, 4 points.',
+    regle: 'De nuit ou par visibilité insuffisante, on circule feux de croisement allumés. Sans éclairage dans un lieu dépourvu d’éclairage public : 135 €, 4 points.',
   }),
 
   // ── Maîtrise du véhicule (erreurs de conduite, pas des infractions) ──

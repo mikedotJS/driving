@@ -17,6 +17,7 @@ NOMBRES = {'un': 1, 'deux': 2, 'trois': 3, 'quatre': 4, 'cinq': 5, 'six': 6, 'hu
 CLASSES = {'première': 1, 'deuxième': 2, 'troisième': 3, 'quatrième': 4, 'cinquième': 5}
 
 root = sys.argv[1]
+AUJOURDHUI = os.environ.get('DATE', '2026-11-20')
 found = {}
 for d, _, files in os.walk(root):
     for f in files:
@@ -28,9 +29,13 @@ for d, _, files in os.walk(root):
         except ET.ParseError:
             continue
         num = (t.findtext('.//META_ARTICLE/NUM') or '').strip()
-        if num not in ARTICLES or (t.findtext('.//META_ARTICLE/ETAT') or '') != 'VIGUEUR':
+        if num not in ARTICLES:
             continue
+        # version applicable aujourd'hui (une version « abrogée en différé » reste en vigueur jusqu'à sa date de fin)
         debut = t.findtext('.//META_ARTICLE/DATE_DEBUT') or ''
+        fin = t.findtext('.//META_ARTICLE/DATE_FIN') or ''
+        if not (debut <= AUJOURDHUI < fin):
+            continue
         c = t.find('.//BLOC_TEXTUEL/CONTENU')
         texte = html.unescape(re.sub(r'<[^>]+>', ' ', ET.tostring(c, encoding='unicode'))) if c is not None else ''
         texte = re.sub(r'\s+', ' ', texte).strip()
@@ -42,8 +47,8 @@ for num in ARTICLES:
         print(f'{num} | ABSENT de l\'extrait')
         continue
     debut, ident, texte = found[num]
-    classes = sorted({CLASSES[m] for m in re.findall(r'contraventions? de la (\w+) classe', texte) if m in CLASSES})
-    points = sorted({NOMBRES[m] for m in re.findall(r'(?:réduction|retrait) de (\w+) points?', texte) if m in NOMBRES}
+    classes = sorted({CLASSES[m] for m in re.findall(r'contraventions? de la (\w+) classe', texte) if m in CLASSES} | {int(m) for m in re.findall(r'contraventions? de la (\d)e classe', texte)})
+    points = sorted({NOMBRES[m] for m in re.findall(r'(?:réduction|retrait) de (\w+) points?', texte) if m in NOMBRES} | {int(m) for m in re.findall(r'réduction de (\d) points?', texte)} | ({1} if "réduction d'un point" in texte else set())
                     | {NOMBRES[m] for m in re.findall(r'de (\w+) points? du permis', texte) if m in NOMBRES})
     susp = 'suspension' in texte
     print(f'{num} | en vigueur depuis le {debut} | {ident} | classes {classes or "-"} | points {points or "-"} | suspension {"oui" if susp else "non"}')

@@ -62,15 +62,15 @@ règle, l'article, l'amende et les points.
 Le barème est celui en vigueur en **novembre 2026**, notamment :
 
 - excès de moins de 5 km/h : amende mais **plus de retrait de point** (depuis le 1ᵉʳ janvier 2024) ;
-- excès de 50 km/h ou plus : **délit** dès la première fois (depuis le 29 décembre 2025) ;
+- excès de 50 km/h ou plus : **délit** dès la première fois (depuis fin décembre 2025) ;
 - refus de priorité à un piéton : **6 points** ;
 - dépassement d'un cycliste : 1 m en ville, 1,50 m hors agglomération ;
 - Paris et Montreuil en « ville 30 », zones de rencontre à 20 km/h, double-sens cyclable.
 
-Le catalogue a été **recoupé le 20 novembre 2026 avec les fiches officielles de service-public**,
-lues en entier : 18 lignes sur 31 y sont confirmées, les 13 autres reposent sur des extraits de
-Légifrance (qui refuse les accès automatisés) ; aucune valeur n'a dû être corrigée. Le détail, ligne
-par ligne et avec les adresses des pages, se trouve dans la section 7 de
+Le catalogue a été **vérifié le 20 novembre 2026 sur le texte officiel** : chaque article cité a été
+relu dans la base LEGI publiée en données ouvertes par la DILA (l'éditeur de Légifrance), et les
+montants sur les fiches de service-public ; aucune valeur n'a dû être corrigée. Le détail, article
+par article avec les identifiants des versions en vigueur, se trouve dans la section 7 de
 [`docs/code-de-la-route-recherche.md`](docs/code-de-la-route-recherche.md), et `tests/bareme.test.ts`
 fige les montants et les points vérifiés. **En cas de doute, Légifrance fait foi.**
 
@@ -93,7 +93,7 @@ l'anneau dans les giratoires, arrêt devant les piétons. Un **conducteur automa
 démonstration) sert aussi de banc d'essai : `npm test` lui fait parcourir cinq leçons dans la
 circulation et exige qu'il arrive au bout sans aucune faute grave ni accrochage — c'est ce qui limite
 les fausses fautes signalées à un élève qui conduit bien. Sur un balayage plus large de 48 trajets,
-tous arrivent au bout et 45 sont sans faute grave ni accrochage. Les mesures (physique comparée à une
+tous arrivent au bout, 47 sont sans faute grave ni accrochage, et aucun ne touche une bordure. Les mesures (physique comparée à une
 citadine réelle, volant émulé, charge de rendu, captures) sont dans [`docs/realisme.md`](docs/realisme.md).
 
 ## Le décor

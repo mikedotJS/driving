@@ -1,5 +1,6 @@
-// Barème vérifié le 20 novembre 2026 sur les fiches officielles de service-public (voir la section 7
-// de docs/code-de-la-route-recherche.md). Ce test fige les montants et les points : toute modification
+// Barème vérifié le 20 novembre 2026 sur le texte officiel des articles (base LEGI de la DILA, relue par
+// tools/bareme/verifier-legi.py) et sur les fiches de service-public (voir la section 7 de
+// docs/code-de-la-route-recherche.md). Ce test fige les montants et les points : toute modification
 // du catalogue doit s'accompagner d'une nouvelle vérification des sources.
 import { describe, it, expect } from 'vitest';
 import { INFRACTIONS, speedingInfraction } from '../src/rules/infractions';
@@ -15,27 +16,27 @@ const VERIFIE: [keyof typeof INFRACTIONS, string, number, number, string][] = [
   ['vitesse_inadaptee', 'R413-17', 135, 0, 'service-public F19460'],
   ['trop_lent', 'R413-19', 35, 0, 'service-public F19460'],
   ['feu_rouge', 'R412-30', 135, 4, 'service-public F31551'],
-  ['feu_orange', 'R412-31', 35, 0, 'extrait Légifrance'],
+  ['feu_orange', 'R412-31', 35, 0, 'texte officiel (base LEGI)'],
   ['stop', 'R415-6', 135, 4, 'service-public F31551'],
   ['cedez', 'R415-7', 135, 4, 'service-public F31551'],
   ['priorite_droite', 'R415-5', 135, 4, 'service-public F31551'],
   ['giratoire', 'R415-10', 135, 4, 'service-public F31551'],
   ['priorite_feu', 'R415-4', 135, 4, 'service-public F31551'],
   ['pieton', 'R415-11', 135, 6, 'service-public F31551 (6 points depuis 2018)'],
-  ['carrefour_encombre', 'R415-2', 135, 0, 'extrait Légifrance'],
+  ['carrefour_encombre', 'R415-2', 135, 0, 'texte officiel (base LEGI)'],
   ['sens_interdit', 'R412-28', 135, 4, 'service-public F31551'],
   ['circulation_gauche', 'R412-9', 135, 3, 'service-public F31551'],
   ['ligne_continue', 'R412-19', 135, 3, 'service-public F31551'],
   ['voie_bus', 'R412-7', 135, 0, 'service-public A18035'],
-  ['bande_cyclable', 'R412-7', 135, 0, 'extrait Légifrance'],
-  ['trottoir', 'R412-7', 135, 0, 'extrait Légifrance'],
+  ['bande_cyclable', 'R412-7', 135, 0, 'texte officiel (base LEGI)'],
+  ['trottoir', 'R412-7', 135, 0, 'texte officiel (base LEGI)'],
   ['clignotant', 'R412-10', 35, 3, 'service-public F31551'],
   ['klaxon', 'R416-1', 35, 0, 'service-public F35343'],
   ['distance', 'R412-12', 135, 3, 'service-public F31551'],
-  ['depassement_cycliste', 'R414-4', 135, 3, 'extrait Légifrance, service-public F31551'],
+  ['depassement_cycliste', 'R414-4', 135, 3, 'texte officiel (base LEGI), service-public F31551'],
   ['arret_passage', 'R417-11', 135, 0, 'service-public F34212'],
   ['ceinture', 'R412-1', 135, 3, 'service-public F628, F31551'],
-  ['feux', 'R416-11', 135, 4, 'extrait Légifrance'],
+  ['feux', 'R416-11', 135, 4, 'texte officiel (base LEGI)'],
 ];
 
 describe('barème des infractions (vérifié sur sources officielles)', () => {

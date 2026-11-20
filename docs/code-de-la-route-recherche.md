@@ -581,5 +581,45 @@ interdite aux permis probatoires — textes d'application attendus) ; instructio
 et points inchangés : 135 € / 3 points) ; financement du permis par le CPF restreint depuis le
 21 février 2026.
 
-Ce qui reste à faire vérifier par un humain sur Légifrance : les lignes marquées « extrait
-seulement » ci-dessus, et les points 3 à 11 de la section 6.
+### 7 bis. Confirmation sur le texte officiel des articles (base LEGI)
+
+Légifrance refusant les robots, le texte a été lu dans la **base LEGI que son éditeur, la DILA,
+publie en données ouvertes** (`https://echanges.dila.gouv.fr/OPENDATA/LEGI/`, archive globale du
+8 novembre 2026, dossier `LEGITEXT000006074228` = Code de la route). Le script
+`tools/bareme/verifier-legi.py` y relit, pour chaque article du barème, la version applicable ce
+jour et en extrait la classe, les points et la suspension. **Toutes les lignes du catalogue sont
+confirmées par le texte officiel**, y compris les 13 qui ne reposaient que sur des extraits :
+
+| Article | Version en vigueur depuis | Identifiant | Ce que dit le texte |
+|---|---|---|---|
+| R413-14 | 1ᵉʳ janvier 2024 | LEGIARTI000048533039 | 4ᵉ classe (3ᵉ si excès < 20 km/h et limite > 50) ; 4 points de 40 à < 50, 3 de 30 à < 40, 2 de 20 à < 30, **1 point de 5 à < 20 km/h** (donc aucun en dessous de 5) ; suspension possible à partir de 30 km/h |
+| L413-1 | 31 décembre 2025 | LEGIARTI000051877176 | 50 km/h ou plus : délit, 3 mois et 3 750 € ; moitié des points (6) ; amende forfaitaire de 300 € |
+| R413-17 | 8 juillet 2023 | LEGIARTI000047794480 | 4ᵉ classe, pas de point |
+| R413-19 | 1ᵉʳ juin 2001 | LEGIARTI000006842210 | 2ᵉ classe |
+| R412-30 | 12 décembre 2019 | LEGIARTI000039478725 | 4ᵉ classe, 4 points, suspension |
+| R412-31 | 1ᵉʳ juin 2001 | LEGIARTI000006842154 | 2ᵉ classe, pas de point |
+| R415-6, R415-7, R415-5, R415-10 | 1ᵉʳ juin 2001 | LEGIARTI000006842245, …246, …244, …250 | 4ᵉ classe, 4 points, suspension |
+| R415-4 | 16 janvier 2022 | LEGIARTI000045025541 | 4ᵉ classe, 4 points, suspension |
+| R415-11 | 19 septembre 2018 | LEGIARTI000037411323 | 4ᵉ classe, **6 points**, suspension |
+| R415-2 | 16 janvier 2022 | LEGIARTI000045025530 | 1ᵉʳ alinéa (s'engager au risque de rester immobilisé) : 4ᵉ classe, pas de point |
+| R412-28 | 1ᵉʳ juin 2001 | LEGIARTI000006842149 | 4ᵉ classe, 4 points, suspension |
+| R412-9 | 11 janvier 2025 | LEGIARTI000050965688 | 4ᵉ classe, 3 points, suspension |
+| R412-19 | 16 janvier 2022 | LEGIARTI000045025516 | 4ᵉ classe, 3 points, suspension |
+| R412-7 | 8 juillet 2023 | LEGIARTI000047794459 | chaussée obligatoire, voies réservées, bandes cyclables : 4ᵉ classe, pas de point |
+| R412-10 | 1ᵉʳ avril 2003 | LEGIARTI000006842127 | 2ᵉ classe, 3 points, suspension |
+| R416-1 | 1ᵉʳ juin 2001 | LEGIARTI000006842256 | 2ᵉ classe |
+| R412-12 | 4 juin 2025 | LEGIARTI000051682619 | deux secondes au moins ; 4ᵉ classe, 3 points, suspension |
+| R414-4 | 22 juin 2003 | LEGIARTI000006842216 | 4ᵉ classe, 3 points, suspension |
+| R417-11 | 8 juillet 2023 | LEGIARTI000047794500 | arrêt sur un passage piéton « très gênant » : 4ᵉ classe (une nouvelle rédaction entre en vigueur le 1ᵉʳ janvier 2027, sanction inchangée) |
+| R412-1 | 19 septembre 2018 | LEGIARTI000037411287 | 4ᵉ classe, 3 points |
+| R416-11 | 1ᵉʳ juin 2001 | LEGIARTI000006842269 | de nuit sans éclairage **en un lieu dépourvu d'éclairage public** : 4ᵉ classe, 4 points, suspension |
+
+Deux précisions tirées de cette lecture : la version de l'article L413-1 qui fait du grand excès de
+vitesse un délit est datée du **31 décembre 2025** dans la base (service-public écrit « depuis le
+29 décembre 2025 ») — le jeu dit désormais « depuis fin décembre 2025 » ; et l'article R416-11 ne
+vise que les lieux sans éclairage public, ce que le texte de la règle affichée précise maintenant.
+Les montants des amendes forfaitaires (35 € pour la 2ᵉ classe, 135 € pour la 4ᵉ) viennent du code de
+procédure pénale et ont été lus sur la fiche service-public F18509.
+
+Ce qui reste à faire vérifier par un humain : les points 3 à 11 de la section 6 (règles locales,
+détails de signalisation).
