@@ -16,7 +16,7 @@ const ground = new Ground(map);
 /** Fait conduire le pilote automatique sur un itinéraire de leçon, avec circulation et piétons. */
 export function autoDrive(theme: Theme, seed: number, vehicles = 28, maxTime = 600, verbose = false) {
   const pose = START_STREETS[theme].map((n) => startOnStreet(net, n, 0.25)).find(Boolean)!;
-  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed)!;
+  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z)) === 0; })!;
   const traffic = new Traffic(net, { vehicles, pedestrians: 22, seed });
   const rules = new RulesEngine(net, traffic);
   const player = new Player(ground, net, traffic);

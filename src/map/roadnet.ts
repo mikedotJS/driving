@@ -138,8 +138,29 @@ export class Lane {
   get endRef(): EdgeEnd { return this.dir > 0 ? this.edge.endB : this.edge.endA; }
   get startRef(): EdgeEnd { return this.dir > 0 ? this.edge.endA : this.edge.endB; }
   /** conversion abscisse voie → abscisse arête */
-  toEdgeS(s: number): number { return this.dir > 0 ? this.s0 + s : this.s0 - s; }
-  fromEdgeS(es: number): number { return this.dir > 0 ? es - this.s0 : this.s0 - es; }
+  /** longueur du tronçon d'axe couvert par la voie (entre les deux embouchures) */
+  private get span(): number { return Math.max(0.01, this.edge.length - this.edge.endA.trim - this.edge.endB.trim); }
+  /**
+   * Abscisse de la voie → abscisse de l'axe de l'arête, et inversement. Dans une courbe, une voie décalée
+   * n'a pas la longueur de l'axe : la correspondance se fait donc point à point (projection), et non par
+   * simple décalage — sinon une ligne de feu au milieu d'une place se retrouvait plusieurs mètres trop loin.
+   * Hors de la voie (avant son début, après sa fin), on prolonge linéairement.
+   */
+  toEdgeS(s: number): number {
+    const L = this.line.length, d = this.dir;
+    if (s <= 0) return this.s0 + d * s;
+    if (s >= L) return this.s0 + d * (this.span + (s - L));
+    const p = this.line.at(s);
+    return this.edge.line.project(p.x, p.z).s;
+  }
+  fromEdgeS(es: number): number {
+    const t = this.dir > 0 ? es - this.s0 : this.s0 - es; // distance le long de l'axe depuis le début de la voie
+    const span = this.span;
+    if (t <= 0) return t;
+    if (t >= span) return this.line.length + (t - span);
+    const p = this.edge.line.at(es);
+    return this.line.project(p.x, p.z).s;
+  }
 }
 
 export class LaneLink {

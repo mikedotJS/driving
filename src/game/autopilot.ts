@@ -184,6 +184,32 @@ export class Autopilot {
       this.fitted++;
     }
   }
+  /**
+   * Contrôle géométrique de l'itinéraire : nombre d'endroits où la trajectoire (déjà ajustée) tourne plus
+   * court que la voiture ne le peut, ou ferait sortir une roue de la chaussée. 0 = praticable sans manœuvre.
+   */
+  pathIssues(isRoad: (x: number, z: number) => boolean, wheelbase = 2.583, halfTrack = 0.75): number {
+    const SIDE = halfTrack + 0.11 + 0.08;
+    let issues = 0;
+    for (let k = 0; k < this.segs.length; k++) {
+      const sg = this.segs[k], L = sg.line.length;
+      if (L < 2) continue;
+      const nearStart = k > 0 && !this.segs[k - 1].lane, nearEnd = k < this.segs.length - 1 && !this.segs[k + 1].lane;
+      for (let q = 0.5; q < L - 0.5; q += 0.75) {
+        if (sg.lane && !((nearStart && q < 12) || (nearEnd && q > L - 12))) continue;
+        if (Math.abs(sg.line.curvatureAt(q, 2)) > 1 / 3.9) { issues++; continue; }
+        const p = sg.line.at(q);
+        for (const ahead of [0, wheelbase]) {
+          const cx = p.x + p.tx * ahead, cz = p.z + p.tz * ahead;
+          // (les deux côtés dehors : la carte est incohérente à cet endroit, ce n'est pas un défaut du virage)
+          const r = isRoad(cx - p.tz * SIDE, cz + p.tx * SIDE), l = isRoad(cx + p.tz * SIDE, cz - p.tx * SIDE);
+          if (r !== l) issues++;
+        }
+      }
+    }
+    return issues;
+  }
+
   /** nombre de segments dont la trajectoire a été ajustée à la chaussée */
   fitted = 0;
 

@@ -564,7 +564,9 @@ export class Traffic {
     for (const p of this.pedestrians) {
       if (p.crossing !== c) continue;
       if (p.state === 'cross') return true;
-      if (p.state === 'wait' && p.hasRight && p.waitTime > 0.4 && v.v < 12) return true;
+      // piéton qui attend : on s'arrête pour le laisser s'engager ; s'il ne traverse toujours pas au bout
+      // d'un quart de minute (une voiture est immobilisée sur son passage), on repart — sinon tout se fige
+      if (p.state === 'wait' && p.hasRight && p.waitTime > 0.4 && p.waitTime < 14 && v.v < 12) return true;
     }
     return false;
   }

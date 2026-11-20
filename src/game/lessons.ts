@@ -210,20 +210,27 @@ function score(theme: Theme, r: Route): number {
 }
 
 /** Cherche, parmi des destinations tirées au hasard, l'itinéraire le mieux adapté au thème. */
-export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: Theme, seed: number, range?: [number, number]): Route | null {
+/**
+ * `check` (facultatif) valide un itinéraire candidat — le jeu s'en sert pour ne retenir que des parcours
+ * dont chaque virage est praticable sans toucher une bordure (voir Autopilot.pathIssues).
+ */
+export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: Theme, seed: number, range?: [number, number], check?: (r: Route) => boolean): Route | null {
   const rng = new Rng(seed);
   const p = from.edge.line.at(fromS);
-  let best: Route | null = null, bestScore = -Infinity;
+  const found: { r: Route; sc: number }[] = [];
   const [dmin, dmax] = range ?? (theme === 'autonomie' ? [1300, 2300] : [500, 1200]);
   for (let i = 0; i < 46; i++) {
     const dest = randomDestination(net, p.x, p.z, dmin, dmax, rng);
     if (!dest) continue;
     const r = findRoute(net, from, fromS, dest, dest.length * 0.5);
     if (!r || r.steps.length < 3 || !drivable(r)) continue;
-    const sc = score(theme, r);
-    if (sc > bestScore) { bestScore = sc; best = r; }
+    found.push({ r, sc: score(theme, r) });
   }
-  return best;
+  found.sort((a, b) => b.sc - a.sc);
+  if (!check) return found[0]?.r ?? null;
+  // le meilleur candidat dont tous les virages sont praticables (au pire, le meilleur tout court)
+  for (const c of found.slice(0, 8)) if (check(c.r)) return c.r;
+  return found[0]?.r ?? null;
 }
 
 /**
@@ -252,13 +259,13 @@ export function drivable(route: Route): boolean {
 }
 
 /** Itinéraire d'examen : plusieurs tronçons variés enchaînés. */
-export function planExam(net: RoadNet, from: RouteStep, fromS: number, seed: number): Route | null {
+export function planExam(net: RoadNet, from: RouteStep, fromS: number, seed: number, check?: (r: Route) => boolean): Route | null {
   const themes: Theme[] = ['priorite', 'feux', 'circulation'];
   let cur = from, s = fromS;
   const steps: RouteStep[] = [];
   let endS = 0;
   for (let k = 0; k < themes.length; k++) {
-    const r = planRoute(net, cur, s, themes[k], seed + k * 101, [380, 760]);
+    const r = planRoute(net, cur, s, themes[k], seed + k * 101, [380, 760], check);
     if (!r) break;
     const part = k === 0 ? r.steps : r.steps.slice(1);
     steps.push(...part);
