@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Panneaux et marquages — contrôle visuel</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        background: #7d8288;
+      }
+      body {
+        margin: 0;
+        padding: 14px 16px 24px;
+        background: #7d8288;
+        color: #f4f4f2;
+        font: 12px/1.3 system-ui, 'Segoe UI', Arial, sans-serif;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 17px;
+      }
+      p.hint {
+        margin: 0 0 12px;
+        opacity: 0.8;
+      }
+      p.hint code {
+        background: rgba(0, 0, 0, 0.25);
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+      h2 {
+        margin: 16px 0 8px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        opacity: 0.9;
+      }
+      .grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 10px;
+        align-items: flex-start;
+      }
+      figure {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+      }
+      figure .box {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      figure canvas {
+        display: block;
+      }
+      figcaption {
+        text-align: center;
+        max-width: 100%;
+      }
+      figcaption b {
+        display: block;
+        font-size: 12px;
+      }
+      figcaption span {
+        display: block;
+        font-size: 10.5px;
+        opacity: 0.85;
+        overflow-wrap: anywhere;
+      }
+      figcaption span.meta {
+        font-size: 9.5px;
+        opacity: 0.6;
+      }
+      .asphalt {
+        background: #36383b;
+        padding: 14px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Signalisation française — contrôle visuel</h1>
+    <p class="hint">
+      Paramètres : <code>?only=AB4,B1,bike</code> · <code>cell=150</code> (taille affichée, px) ·
+      <code>size=256</code> (résolution de la texture) · <code>text=…</code> (texte libre) · <code>signs=0</code> /
+      <code>marks=0</code>
+    </p>
+    <main id="app"></main>
+    <script type="module" src="./signs.ts"></script>
+  </body>
+</html>

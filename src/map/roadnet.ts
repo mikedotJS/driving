@@ -23,10 +23,10 @@ export interface MapFile {
   vertices: RawVertex[];
   edges: RawEdge[];
   restrictions: { kind: string; from: number; via: number; to: number }[];
-  chunks: Record<string, { r: RawPoly[]; w: RawPoly[] }>;
+  chunks: Record<string, { r: RawPoly[]; w: RawPoly[]; a?: (RawPoly & { k: string })[] }>;
   buildings: RawBuilding[];
   barriers: { k: string; h: number; p: number[] }[];
-  areas: { k: string; p: number[]; n?: string; s?: string }[];
+  areas: { k: string; x: number; z: number; n: string }[];
   lines: { k: string; p: number[]; n?: string }[];
   trees: [number, number, number, number, string][];
   lamps: [number, number][];
@@ -169,7 +169,8 @@ export class Edge {
     this.paris = !!raw.pa; this.sett = raw.sf === 'sett'; this.living = raw.c === 'living_street';
     this.features = raw.f ?? [];
     this.limitTagged = raw.ms > 0;
-    this.limit = raw.ms > 0 ? raw.ms : this.living ? 20 : (raw.c === 'primary' || raw.c === 'secondary') && !this.paris ? 50 : 30;
+    // sans relevé : zone de rencontre à 20, sinon 30 (Paris et Montreuil sont des « villes 30 »)
+    this.limit = raw.ms > 0 ? raw.ms : this.living ? 20 : 30;
     let off = 0;
     const W = raw.st.reduce((s, x) => s + x[1], 0);
     this.width = W;

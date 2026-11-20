@@ -797,6 +797,41 @@ for (const rel of relations.values()) {
   for (const ring of relationRings(rel)) addArea(k, ring, rel.tags);
 }
 
+// Découpe des espaces (pelouses, places…) par dalle, chaussée retirée
+{
+  const order = { water: 0, park: 1, grass: 2, wood: 3, pitch: 4, cemetery: 5, plaza: 6, parking: 7, dirt: 8 };
+  let n = 0;
+  const byCell = new Map();
+  for (const a of areas) {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const p of a.pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+    a.path = toPath(a.pts);
+    for (let ci = Math.floor(x0 / CHUNK); ci <= Math.floor(x1 / CHUNK); ci++) for (let cj = Math.floor(z0 / CHUNK); cj <= Math.floor(z1 / CHUNK); cj++) {
+      const k = `${ci},${cj}`;
+      if (!chunks[k]) continue;
+      let l = byCell.get(k); if (!l) byCell.set(k, (l = [])); l.push(a);
+    }
+  }
+  for (const [k, list] of byCell) {
+    const [ci, cj] = k.split(',').map(Number);
+    const x0 = ci * CHUNK, z0 = cj * CHUNK;
+    const rect = rectPath(x0, z0, x0 + CHUNK, z0 + CHUNK);
+    const roadHere = boolOp(INTER, road, rect);
+    const out = [];
+    for (const a of list) {
+      let clip = boolOp(INTER, [a.path], rect);
+      if (!clip.length) continue;
+      if (roadHere.length) clip = boolOp(DIFF, clip, roadHere);
+      if (!clip.length) continue;
+      const polys = exToPolys(boolEx(UNION, clip, null), x0, z0);
+      for (const poly of polys) { out.push({ k: a.kind, o: poly.o, h: poly.h }); n++; }
+    }
+    out.sort((p, q) => (order[p.k] ?? 9) - (order[q.k] ?? 9));
+    if (out.length) chunks[k].a = out;
+  }
+  log(`espaces découpés par dalle : ${n} polygones`);
+}
+
 // voies piétonnes linéaires et voies de tram (décor)
 const lines = [];
 for (const w of ways.values()) {
@@ -906,7 +941,7 @@ const out = {
     return o;
   }),
   barriers: barriers.map((b) => ({ k: b.kind, h: b.h, p: flat(b.pts) })),
-  areas: areas.map((a) => { const o = { k: a.kind, p: flat(a.pts) }; if (a.name) o.n = a.name; if (a.sport) o.s = a.sport; return o; }),
+  areas: areas.filter((a) => a.name).map((a) => { const c = G.ringCentroid(a.pts); return { k: a.kind, x: r2(c[0]), z: r2(c[1]), n: a.name }; }),
   lines: lines.map((l) => ({ k: l.kind, p: flat(l.pts), n: l.name })),
   trees, lamps, pois,
 };

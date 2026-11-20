@@ -5,3 +5,4 @@ data/osm-raw/
 .DS_Store
 .vite/
 test-results/
+data/polyhaven/
