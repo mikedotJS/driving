@@ -48,6 +48,9 @@ export class PlayerView {
   private readonly cgShift: number;
   private tmp = new THREE.Vector3();
   private gaugeTimer = 0;
+  /** écran central de la planche de bord (GPS) */
+  readonly screenCanvas = document.createElement('canvas');
+  private screenTex: THREE.CanvasTexture;
 
   constructor(private scene: THREE.Scene, private renderer: THREE.WebGLRenderer, aspect: number) {
     this.camera = new THREE.PerspectiveCamera(this.fov, aspect, 0.08, 1800);
@@ -84,10 +87,18 @@ export class PlayerView {
       const center = bb.getCenter(new THREE.Vector3());
       this.mirrors.push({ mesh, rt, cam, convex, hw: (bb.max.x - bb.min.x) / 2, hh: (bb.max.y - bb.min.y) / 2, center });
     };
+    this.screenCanvas.width = 512; this.screenCanvas.height = 288;
+    this.screenTex = new THREE.CanvasTexture(this.screenCanvas);
+    this.screenTex.colorSpace = THREE.SRGBColorSpace;
+    const sm = this.cockpit.screen.material as THREE.MeshBasicMaterial;
+    sm.map = this.screenTex; sm.color.setScalar(0.85); sm.needsUpdate = true;
     mk(this.cockpit.mirrors.center, 640, 192, 1);
     mk(this.cockpit.mirrors.left, 448, 288, 0.5);
     mk(this.cockpit.mirrors.right, 448, 288, 0.42);
   }
+
+  /** À appeler après avoir redessiné `screenCanvas`. */
+  refreshScreen() { this.screenTex.needsUpdate = true; }
 
   setAspect(aspect: number) { this.camera.aspect = aspect; this.camera.updateProjectionMatrix(); }
 

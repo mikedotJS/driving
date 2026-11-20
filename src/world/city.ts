@@ -45,6 +45,7 @@ export class City {
   readonly group = new THREE.Group();
   private chunks = new Map<string, Chunk>();
   private pending: [number, number][] = [];
+  private lastCi = 1e9; private lastCj = 1e9;
   private markings: MarkingSet;
   private bBuckets = new Map<string, RawBuilding[]>();
   private barBuckets = new Map<string, { k: string; h: number; p: number[] }[]>();
@@ -97,7 +98,10 @@ export class City {
     const C = this.size;
     const ci0 = Math.floor(x / C), cj0 = Math.floor(z / C);
     const r = Math.ceil(radius / C);
-    if (!this.pending.length) {
+    if (!this.pending.length || ci0 !== this.lastCi || cj0 !== this.lastCj) {
+      // nouvelle dalle centrale : on replanifie du plus proche au plus lointain
+      this.lastCi = ci0; this.lastCj = cj0;
+      this.pending.length = 0;
       for (let d = 0; d <= r; d++) {
         for (let i = -d; i <= d; i++) for (let j = -d; j <= d; j++) {
           if (Math.max(Math.abs(i), Math.abs(j)) !== d) continue;
@@ -131,6 +135,7 @@ export class City {
     const m = this.mats;
     const add = (g: GeoBuilder, mat: THREE.Material, cast = false, receive = true) => {
       if (g.empty) return;
+      if (!g.label) g.label = `${key} ${mat.name || mat.type}`;
       const mesh = new THREE.Mesh(g.build(), mat);
       mesh.castShadow = cast; mesh.receiveShadow = receive;
       mesh.matrixAutoUpdate = false;
@@ -139,12 +144,21 @@ export class City {
 
     // ── chaussée et trottoirs ──
     const road = new GeoBuilder(), walk = new GeoBuilder();
+    road.label = key + ' chaussée'; walk.label = key + ' trottoir';
     for (const p of raw.r) road.polygon(p.o, p.h, 0, 1 / 3.2, ox, oz, CM);
     for (const p of raw.w) walk.polygon(p.o, p.h, KERB_H, 1 / 2.6, ox, oz, CM);
     add(road, m.road); add(walk, m.sidewalk);
+    // cœurs d'îlot : jardins et cours derrière les façades
+    if (raw.g) {
+      const inner = new GeoBuilder();
+      inner.label = key + ' îlots';
+      for (const p of raw.g) inner.polygon(p.o, p.h, KERB_H - 0.01, 1 / 5, ox, oz, CM);
+      add(inner, m.yard);
+    }
 
     // ── bordures et caniveaux ──
     const kerb = new GeoBuilder(), gutter = new GeoBuilder();
+    kerb.label = key + ' bordure'; gutter.label = key + ' caniveau';
     const lim = C / CM;
     const ring = (r: number[], isHole: boolean) => {
       const n = r.length / 2;
@@ -186,7 +200,7 @@ export class City {
 
     // ── marquages ──
     const mk = this.markings.white.get(key);
-    if (mk) add(mk, m.paint);
+    if (mk) { mk.label = key + ' marquage'; add(mk, m.paint); }
 
     // ── espaces verts, places ──
     if (raw.a) {
@@ -205,6 +219,7 @@ export class City {
     const list = this.bBuckets.get(key);
     if (list) {
       const walls = new GeoBuilder(true, 3, 'facade'), roofs = new GeoBuilder(true);
+      walls.label = key + ' façades'; roofs.label = key + ' toits';
       for (const b of list) this.building(b, walls, roofs);
       add(walls, m.facade, true); add(roofs, m.roof, true);
     }
@@ -213,6 +228,7 @@ export class City {
     const bars = this.barBuckets.get(key);
     if (bars) {
       const wall = new GeoBuilder(), fence = new GeoBuilder(), hedge = new GeoBuilder();
+      wall.label = key + ' murs'; fence.label = key + ' clôtures'; hedge.label = key + ' haies';
       for (const b of bars) {
         const g = b.k === 'hedge' ? hedge : b.k === 'wall' ? wall : fence;
         const t = b.k === 'hedge' ? 0.7 : b.k === 'wall' ? 0.24 : 0.05;

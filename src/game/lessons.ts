@@ -210,11 +210,11 @@ function score(theme: Theme, r: Route): number {
 }
 
 /** Cherche, parmi des destinations tirées au hasard, l'itinéraire le mieux adapté au thème. */
-export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: Theme, seed: number): Route | null {
+export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: Theme, seed: number, range?: [number, number]): Route | null {
   const rng = new Rng(seed);
   const p = from.edge.line.at(fromS);
   let best: Route | null = null, bestScore = -Infinity;
-  const [dmin, dmax] = theme === 'autonomie' ? [1300, 2300] : [500, 1200];
+  const [dmin, dmax] = range ?? (theme === 'autonomie' ? [1300, 2300] : [500, 1200]);
   for (let i = 0; i < 46; i++) {
     const dest = randomDestination(net, p.x, p.z, dmin, dmax, rng);
     if (!dest) continue;
@@ -228,12 +228,12 @@ export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: T
 
 /** Itinéraire d'examen : plusieurs tronçons variés enchaînés. */
 export function planExam(net: RoadNet, from: RouteStep, fromS: number, seed: number): Route | null {
-  const themes: Theme[] = ['priorite', 'feux', 'pietons', 'circulation'];
+  const themes: Theme[] = ['priorite', 'feux', 'circulation'];
   let cur = from, s = fromS;
   const steps: RouteStep[] = [];
   let endS = 0;
   for (let k = 0; k < themes.length; k++) {
-    const r = planRoute(net, cur, s, themes[k], seed + k * 101);
+    const r = planRoute(net, cur, s, themes[k], seed + k * 101, [380, 760]);
     if (!r) break;
     const part = k === 0 ? r.steps : r.steps.slice(1);
     steps.push(...part);
@@ -251,6 +251,10 @@ export function quietStreet(net: RoadNet, x: number, z: number): StartPose | nul
   for (const e of net.edges) {
     if (e.cls !== 'residential' && e.cls !== 'unclassified') continue;
     if (e.length < 170 || e.roundabout || e.living) continue;
+    // une vraie petite rue : ni couloir de bus ni bande cyclable, pas de feux aux extrémités
+    if (e.strips.some((s) => s.kind === 'B' || s.kind === 'C')) continue;
+    if (/^(Boulevard|Avenue|Place)/.test(e.name)) continue;
+    if (e.endA.control === 'signal' || e.endB.control === 'signal') continue;
     const a = e.line.at(0), b = e.line.at(e.length);
     const straight = Math.hypot(b.x - a.x, b.z - a.z) / e.length;
     if (straight < 0.985) continue;

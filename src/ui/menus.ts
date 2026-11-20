@@ -125,7 +125,7 @@ export class Menus {
       field('Angle de rotation du volant', 'Doit correspondre au réglage du pilote Logitech (G HUB) : 900° pour un comportement réaliste.',
         range(s.wheelRange, 270, 1080, 30, (v) => { s.wheelRange = v; }, (v) => `${v}°`)),
       field('Boîte de vitesses', 'La boîte manuelle utilise la pédale d’embrayage du G923 ; sans embrayage, choisissez « embrayage piloté ».',
-        select<TransmissionMode>(s.transmission, Object.entries(TRANSMISSION_LABELS) as [TransmissionMode, string][], (v) => { s.transmission = v; })),
+        select<TransmissionMode>(s.transmission, Object.entries(TRANSMISSION_LABELS) as [TransmissionMode, string][], (v) => { s.transmission = v; s.transmissionAuto = false; })),
       field('Levier de vitesses en H (Driving Force Shifter)', 'Décochez pour changer de rapport avec les palettes au volant.', check(s.hShifter, (v) => { s.hShifter = v; })),
       field('Sensibilité de la pédale de frein', 'La pédale du G923 est très ferme : augmentez si le freinage vous semble trop dur à doser.',
         range(s.brakeGamma, 0.5, 1.5, 0.05, (v) => { s.brakeGamma = v; }, (v) => (v < 0.95 ? 'forte' : v > 1.05 ? 'douce' : 'normale'))),

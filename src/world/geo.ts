@@ -48,7 +48,16 @@ export class GeoBuilder {
     }
   }
 
+  /** étiquette de mise au point */
+  label = '';
+
   build(): THREE.BufferGeometry {
+    // garde-fou : une coordonnée invalide rendrait tout le maillage invisible
+    let bad = 0;
+    for (let i = 0; i < this.pos.length; i++) if (!Number.isFinite(this.pos[i])) { this.pos[i] = 0; bad++; }
+    for (let i = 0; i < this.nor.length; i++) if (!Number.isFinite(this.nor[i])) this.nor[i] = 0;
+    for (let i = 0; i < this.uv.length; i++) if (!Number.isFinite(this.uv[i])) this.uv[i] = 0;
+    if (bad) console.warn(`Géométrie « ${this.label} » : ${bad} coordonnées invalides corrigées`);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nor, 3));

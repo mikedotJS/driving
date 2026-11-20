@@ -72,13 +72,14 @@ function streaks(p: Pair, x: number, y: number, w: number, len: number, alpha = 
     c.fillStyle = g; c.fillRect(sx * PX, y * PY, (0.01 + rng.next() * 0.03) * PX, l * PY);
   }
 }
-function tileImage(p: Pair, img: HTMLImageElement | null, base: string, metres: number, tint?: string) {
+function tileImage(p: Pair, img: HTMLImageElement | null, base: string, metres: number, tint?: string, alpha = 1) {
   const { c } = p;
   c.fillStyle = base; c.fillRect(0, 0, TILE, TILE);
   if (img && img.width) {
     const s = metres * PX;
     c.save();
-    c.globalAlpha = 1;
+    // alpha < 1 : la photo de matière ne fait que moduler la couleur de base (taches moins répétitives)
+    c.globalAlpha = alpha;
     for (let y = 0; y < TILE; y += s) for (let x = 0; x < TILE; x += s) c.drawImage(img, x, y, s, s);
     if (tint) { c.globalCompositeOperation = 'multiply'; c.fillStyle = tint; c.fillRect(0, 0, TILE, TILE); }
     c.restore();
@@ -183,7 +184,7 @@ function drawStyle(style: FacadeStyle, role: TileRole, im: WallImages): ImageDat
   switch (style) {
     case 'haussmann': {
       // pierre de taille blonde, refends, hautes fenêtres à garde-corps
-      tileImage(p, im.stone, '#d8cdb4', 3.2, '#efe4cc');
+      tileImage(p, im.stone, '#dccfb2', 3.2, undefined, 0.42);
       shade(c, 0, 0, W, H, 0.0, 0.06);
       for (let y = 0; y < H; y += 0.42) R(c, 0, y, W, 0.012, 'rgba(70,58,40,0.22)');
       if (role === 'plain') { for (let y = 0.21; y < H; y += 0.84) R(c, W / 2, y, 0.01, 0.42, 'rgba(70,58,40,0.2)'); break; }
@@ -306,7 +307,7 @@ function drawStyle(style: FacadeStyle, role: TileRole, im: WallImages): ImageDat
     }
     case 'moderne': {
       // barre des années 60-70 : panneaux béton, fenêtres en bande, allèges colorées
-      tileImage(p, im.concrete, '#c9c7c0', 3.2, '#e8e6e0');
+      tileImage(p, im.concrete, '#cfcdc6', 3.2, undefined, 0.3);
       R(c, 0, 0, 0.03, H, 'rgba(0,0,0,0.25)'); R(c, 0, H - 0.03, W, 0.03, 'rgba(0,0,0,0.3)');
       if (role === 'plain') { streaks(p, 0, 0, W, 1.6, 0.1); break; }
       if (role === 'door') {

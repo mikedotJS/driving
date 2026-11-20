@@ -113,12 +113,12 @@ export class Props {
     // houppier : cartes de feuillage réparties sur un ellipsoïde, normales sphériques
     const rng = new Rng(77);
     const g = new GeoBuilder();
-    const cards = 26;
+    const cards = 36;
     for (let i = 0; i < cards; i++) {
       const u = rng.next() * Math.PI * 2, v = Math.acos(rng.range(-0.75, 1));
       const r = 0.55 + rng.next() * 0.4;
       const cx = Math.sin(v) * Math.cos(u) * r, cy = Math.cos(v) * r * 0.82 + 0.05, cz = Math.sin(v) * Math.sin(u) * r;
-      const size = 0.52 + rng.next() * 0.3;
+      const size = 0.46 + rng.next() * 0.28;
       // base de la carte : tangente à la sphère, orientation aléatoire
       const n = new THREE.Vector3(cx, cy, cz).normalize();
       const t = new THREE.Vector3(rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5).cross(n).normalize();
@@ -136,7 +136,7 @@ export class Props {
     }
     this.crownGeo = g.build();
     const leaf = foliageTexture();
-    this.crownMat = new THREE.MeshStandardMaterial({ map: leaf, alphaTest: 0.42, side: THREE.DoubleSide, roughness: 0.92, metalness: 0, color: new THREE.Color(0.9, 1.0, 0.82) });
+    this.crownMat = new THREE.MeshStandardMaterial({ map: leaf, alphaTest: 0.42, side: THREE.DoubleSide, roughness: 0.95, metalness: 0, color: new THREE.Color(1.25, 1.3, 1.1) });
     this.crownDepth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: leaf, alphaTest: 0.42 });
 
     // lampadaire : mât conique, crosse, lanterne
@@ -526,7 +526,7 @@ export class Props {
         q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd * 6.28);
         m.compose(p.set(x, KERB_H + trunkH + cr * 0.55, z), q, s.set(cr, cr * 1.05, cr));
         crowns.setMatrixAt(i, m);
-        col.setHSL(0.26 + rnd * 0.06, 0.45, 0.42 + ((rnd * 7) % 1) * 0.16);
+        col.setHSL(0.24 + rnd * 0.07, 0.3, 0.5 + ((rnd * 7) % 1) * 0.22);
         crowns.setColorAt(i, col);
       });
       trunks.castShadow = true; trunks.receiveShadow = true;
@@ -581,15 +581,15 @@ function foliageTexture(): THREE.CanvasTexture {
   const c = cv.getContext('2d')!;
   const rng = new Rng(2024);
   c.clearRect(0, 0, S, S);
-  for (let i = 0; i < 1500; i++) {
-    // densité plus forte au centre
-    const a = rng.next() * Math.PI * 2, r = Math.pow(rng.next(), 0.75) * S * 0.47;
+  // amas de petites feuilles : sombres au cœur, plus claires en périphérie
+  for (let i = 0; i < 2600; i++) {
+    const a = rng.next() * Math.PI * 2, r = Math.pow(rng.next(), 0.62) * S * 0.48;
     const x = S / 2 + Math.cos(a) * r, y = S / 2 + Math.sin(a) * r;
-    const l = 30 + rng.next() * 40, sz = 5 + rng.next() * 7;
-    const shade = r / (S * 0.47);
-    c.fillStyle = `hsl(${88 + rng.next() * 34}, ${42 + rng.next() * 25}%, ${l * (0.62 + 0.38 * shade)}%)`;
+    const shade = r / (S * 0.48);
+    const l = (17 + rng.next() * 16) * (0.6 + 0.6 * shade), sz = 2.6 + rng.next() * 3.6;
+    c.fillStyle = `hsl(${92 + rng.next() * 30}, ${30 + rng.next() * 18}%, ${l}%)`;
     c.beginPath();
-    c.ellipse(x, y, sz, sz * 0.55, rng.next() * Math.PI, 0, Math.PI * 2);
+    c.ellipse(x, y, sz, sz * 0.5, rng.next() * Math.PI, 0, Math.PI * 2);
     c.fill();
   }
   const t = new THREE.CanvasTexture(cv);

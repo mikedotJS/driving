@@ -33,6 +33,39 @@ export class Hud {
   showMinimap = true;
 
   show(v: boolean) { this.root.classList.toggle('hidden', !v); }
+  /** Affichage réduit en vue conducteur. */
+  setCockpit(v: boolean) { this.root.classList.toggle('cockpit', v); }
+
+  /** Écran GPS de la planche de bord : carte, prochaine manœuvre, limitation. */
+  drawScreen(canvas: HTMLCanvasElement, net: RoadNet, x: number, z: number, heading: number, route: Route | null, step: number, next: { m: Maneuver; dist: number } | null, street: string, limit: number) {
+    this.drawMinimap(net, x, z, heading, route, step, canvas, 115);
+    const c = canvas.getContext('2d')!;
+    const W = canvas.width, H = canvas.height;
+    c.fillStyle = 'rgba(12,16,22,0.88)'; c.fillRect(0, 0, W, 54);
+    c.fillStyle = '#fff'; c.textBaseline = 'middle';
+    if (next) {
+      const k = next.m.kind;
+      c.fillStyle = '#2f7de1'; c.fillRect(8, 7, 40, 40);
+      c.fillStyle = '#fff'; c.font = 'bold 30px sans-serif'; c.textAlign = 'center';
+      c.fillText(k === 'droite' ? '↱' : k === 'gauche' ? '↰' : k === 'giratoire' ? '⟳' : k === 'arrivee' ? '⚑' : '↑', 28, 28);
+      c.textAlign = 'left'; c.font = 'bold 24px sans-serif';
+      const d = next.dist;
+      c.fillText(d > 950 ? `${(d / 1000).toFixed(1)} km` : `${Math.max(0, Math.round(d / 10) * 10)} m`, 58, 20);
+      c.font = '15px sans-serif'; c.fillStyle = '#b9c4d2';
+      c.fillText((k === 'giratoire' ? `${next.m.exit}ᵉ sortie ` : '') + (k === 'arrivee' ? 'Arrivée' : next.m.street || ''), 58, 42, W - 130);
+    } else {
+      c.textAlign = 'left'; c.font = 'bold 20px sans-serif';
+      c.fillText(street || 'Conduite libre', 14, 28, W - 90);
+    }
+    // limitation en vigueur
+    c.beginPath(); c.arc(W - 30, 27, 21, 0, Math.PI * 2); c.fillStyle = '#fff'; c.fill();
+    c.lineWidth = 5; c.strokeStyle = '#d0222b'; c.stroke();
+    c.fillStyle = '#111'; c.font = 'bold 19px sans-serif'; c.textAlign = 'center'; c.fillText(String(limit), W - 30, 28);
+    if (next && street) {
+      c.fillStyle = 'rgba(12,16,22,0.8)'; c.fillRect(0, H - 30, W, 30);
+      c.fillStyle = '#dfe5ec'; c.font = '15px sans-serif'; c.textAlign = 'center'; c.fillText(street, W / 2, H - 15, W - 20);
+    }
+  }
 
   setDash(d: DashState) {
     const L = this.last;

@@ -86,6 +86,7 @@ export class MaterialLib {
   paint!: THREE.MeshStandardMaterial;
   paintYellow!: THREE.MeshStandardMaterial;
   grass!: THREE.MeshStandardMaterial;
+  yard!: THREE.MeshStandardMaterial;
   plaza!: THREE.MeshStandardMaterial;
   dirt!: THREE.MeshStandardMaterial;
   roof!: THREE.MeshStandardMaterial;
@@ -106,7 +107,7 @@ export class MaterialLib {
     const [road, sett, sidewalk, kerb, grass, roof, wallM, facades] = await Promise.all([
       pbr('asphalt_02', aniso, { color: new THREE.Color(1.5, 1.5, 1.52) }, 0.9),
       pbr('cobblestone_floor_08', aniso, { color: new THREE.Color(1.05, 1.03, 1.0) }, 1.2),
-      pbr('asphalt_04', aniso, { color: new THREE.Color(1.12, 1.1, 1.07) }, 0.6),
+      pbr('asphalt_04', aniso, { color: new THREE.Color(0.86, 0.85, 0.83) }, 0.6),
       pbr('granite_tile', aniso, { color: new THREE.Color(1.25, 1.24, 1.22) }, 0.5),
       pbr('leafy_grass', aniso, { color: new THREE.Color(0.62, 0.95, 0.5) }, 1.0),
       pbr('grey_roof_01', aniso, { color: new THREE.Color(0.8, 0.83, 0.87) }, 0.8),
@@ -118,6 +119,9 @@ export class MaterialLib {
     this.sidewalk = sidewalk; addMacroVariation(sidewalk, 0.45);
     this.kerb = kerb;
     this.grass = grass; addMacroVariation(grass, 0.5);
+    // cœurs d'îlot : herbe plus terne, mêlée de terre
+    this.yard = new THREE.MeshStandardMaterial({ map: grass.map, normalMap: grass.normalMap, roughnessMap: grass.roughnessMap, color: new THREE.Color(0.62, 0.72, 0.5), roughness: 1, metalness: 0 });
+    addMacroVariation(this.yard, 0.75);
     this.roof = roof;
     this.wall = wallM;
     this.facades = facades;

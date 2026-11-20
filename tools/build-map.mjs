@@ -742,22 +742,46 @@ function exToPolys(ex, ox, oz) {
   return polys;
 }
 
+// Bande de trottoir : jusqu'à 6 m du bord de chaussée (plus les voies piétonnes) ; au-delà, cœur d'îlot.
+const SIDEWALK_BAND = 6;
+let band;
+{
+  let ped = [];
+  for (const w of ways.values()) {
+    const t = w.tags;
+    if (!(t.highway === 'pedestrian' && t.area !== 'yes')) continue;
+    if (t.tunnel && t.tunnel !== 'no') continue;
+    const pts = w.nds.map((id) => nodeXZ.get(id)).filter(Boolean);
+    if (pts.length < 2 || !pts.some(inRect)) continue;
+    ped = ped.concat(bufferLine(G.simplifyDP(pts, 0.2), 5));
+  }
+  band = boolOp(UNION, inflate(road, SIDEWALK_BAND).concat(ped), null);
+  band = C.Clipper.CleanPolygons(band, 3);
+  log(`bande de trottoir : ${band.length} anneaux, ${nVerts(band)} sommets`);
+}
+
 const chunks = {};
-let nRoadV = 0, nWalkV = 0;
+let nRoadV = 0, nWalkV = 0, nInnerV = 0;
 const countV = (polys) => polys.reduce((s, p) => s + p.o.length / 2 + p.h.reduce((t, h) => t + h.length / 2, 0), 0);
 for (let ci = ci0; ci <= ci1; ci++) {
-  const col = boolOp(INTER, road, rectPath(ci * CHUNK, RECT.z0 - 500, (ci + 1) * CHUNK, RECT.z1 + 500));
+  const colRect = rectPath(ci * CHUNK, RECT.z0 - 500, (ci + 1) * CHUNK, RECT.z1 + 500);
+  const col = boolOp(INTER, road, colRect);
+  const bandCol = boolOp(INTER, band, colRect);
   for (let cj = cj0; cj <= cj1; cj++) {
     const x0 = ci * CHUNK, z0 = cj * CHUNK;
     const rect = rectPath(x0, z0, x0 + CHUNK, z0 + CHUNK);
     const cellRoad = boolOp(INTER, col, rect);
+    const cellBand = boolOp(INTER, bandCol, rect);
     const roadPolys = exToPolys(boolEx(UNION, cellRoad, null), x0, z0);
-    const walkPolys = exToPolys(boolEx(DIFF, rect, cellRoad), x0, z0);
-    nRoadV += countV(roadPolys); nWalkV += countV(walkPolys);
-    chunks[`${ci},${cj}`] = { r: roadPolys, w: walkPolys };
+    const walkPolys = exToPolys(boolEx(DIFF, cellBand, cellRoad), x0, z0);
+    const innerPolys = exToPolys(boolEx(DIFF, rect, cellBand), x0, z0);
+    nRoadV += countV(roadPolys); nWalkV += countV(walkPolys); nInnerV += countV(innerPolys);
+    const ck = { r: roadPolys, w: walkPolys };
+    if (innerPolys.length) ck.g = innerPolys;
+    chunks[`${ci},${cj}`] = ck;
   }
 }
-log(`dalles : ${Object.keys(chunks).length} (${nRoadV} sommets chaussée, ${nWalkV} sommets trottoir)`);
+log(`dalles : ${Object.keys(chunks).length} (${nRoadV} sommets chaussée, ${nWalkV} trottoir, ${nInnerV} cœurs d'îlot)`);
 
 // ───────────────────────── Espaces, points d'intérêt ─────────────────────────
 function areaKind(t) {

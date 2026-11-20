@@ -213,7 +213,13 @@ export class Game implements MenuHost {
     this.controls.onDeviceChange = (name, kind) => {
       this.hud.setDevice(kind === 'wheel' ? `Volant : ${name}` : kind === 'pad' ? `Manette : ${name}` : 'Clavier');
       this.applySettings();
-      if (this.state === 'menu' && this.menus.open) this.menus.main();
+      if (this.state === 'menu' && this.menus.open) {
+        // premier branchement d'un volant : on propose tout de suite la calibration
+        if (kind === 'wheel' && this.controls.profile && !this.controls.profile.calibrated) this.menus.calibrate(() => { this.applySettings(); this.menus.main(); });
+        else this.menus.main();
+      } else if (kind === 'wheel' && this.state === 'drive' && this.controls.profile && !this.controls.profile.calibrated) {
+        this.hud.coach('Volant détecté. Pensez à le calibrer : menu Pause → Réglages → Calibrer.', '', false, 8);
+      }
     };
     this.hud.setDevice('Clavier');
     this.voice.onSpeak = (active) => { if (this.audioReady) this.audio.duck(active ? 0.45 : 0); };
@@ -240,6 +246,11 @@ export class Game implements MenuHost {
     const c = this.controls;
     if (c.profile) { c.profile.rangeDeg = s.wheelRange; c.profile.hShifter = s.hShifter; }
     c.brakeGamma = s.brakeGamma;
+    if (s.transmissionAuto) {
+      // sans pédale d'embrayage (clavier, manette, volant à deux pédales), l'embrayage est piloté
+      const clutch = c.state.device === 'wheel' && !!c.profile?.clutch;
+      s.transmission = clutch ? 'manual' : 'autoclutch';
+    }
     if (this.player) this.player.car.mode = s.transmission;
     if (this.view) {
       this.view.fov = s.fov; this.view.lookIntoTurns = s.lookIntoTurns;
@@ -311,7 +322,8 @@ export class Game implements MenuHost {
   /** Décale le départ le long de la rue jusqu'à trouver une place dégagée (rien 11 m devant, 6 m derrière). */
   private freeSpot(pose: StartPose): StartPose {
     const e = pose.edge;
-    const lo = e.endA.trim + 8, hi = e.length - e.endB.trim - 8;
+    const lo = e.endA.trim + 9, hi = e.length - e.endB.trim - 9;
+    const offCrossing = (s: number) => !e.crossings.some((c) => Math.abs(c.s - s) < c.halfLen + 8);
     const clear = (p: StartPose) => {
       const fx = Math.sin(p.heading), fz = -Math.cos(p.heading);
       for (const b of this.parked.near(p.x, p.z, 14)) {
@@ -319,21 +331,23 @@ export class Game implements MenuHost {
         const lat = Math.abs((b.x - p.x) * -fz + (b.z - p.z) * fx);
         if (lat < 1.9 && ahead > -6.5 - b.halfLen && ahead < 11 + b.halfLen) return false;
       }
-      return !e.crossings.some((c) => Math.abs(c.s - p.s) < c.halfLen + 7);
+      return offCrossing(p.s);
     };
-    if (clear(pose)) return pose;
-    for (let k = 1; k <= 30; k++) {
-      for (const sgn of [1, -1]) {
-        const s = pose.s + sgn * k * 2.5;
-        if (s < lo || s > hi) continue;
-        const p = poseOn(e, pose.dir, s);
-        if (clear(p)) return p;
-      }
+    const candidates: number[] = [pose.s];
+    for (let k = 1; k <= 40; k++) candidates.push(pose.s + k * 2.5, pose.s - k * 2.5);
+    // 1) le long du trottoir, entre deux voitures garées
+    for (const s of candidates) {
+      if (s < lo || s > hi) continue;
+      const p = poseOn(e, pose.dir, s);
+      if (clear(p)) return p;
     }
-    // aucune place libre : départ sur la voie de circulation
+    // 2) à défaut, sur la voie de circulation, loin des passages piétons
     const lanes = pose.dir > 0 ? e.lanesF : e.lanesB;
     const lane = lanes[lanes.length - 1];
-    if (lane) { const q = e.line.atOffset(pose.s, lane.off); return { ...pose, x: q.x, z: q.z }; }
+    for (const s of candidates) {
+      if (s < lo || s > hi || !offCrossing(s)) continue;
+      if (lane) { const q = e.line.atOffset(s, lane.off); return { ...pose, x: q.x, z: q.z, s }; }
+    }
     return pose;
   }
 
@@ -423,12 +437,23 @@ export class Game implements MenuHost {
     const L = this.lesson;
     if (!L.steps.length) { this.hud.setSteps('', null); return; }
     const auto = this.player.car.mode === 'auto';
+    const piloted = this.player.car.mode === 'autoclutch';
     const views: StepView[] = L.steps.map((st, i) => ({
-      text: typeof st.text === 'function' ? st.text(auto) : st.text,
-      hint: typeof st.hint === 'function' ? st.hint(auto) : st.hint,
+      text: this.adapt(typeof st.text === 'function' ? st.text(auto) : st.text, piloted),
+      hint: this.adapt((typeof st.hint === 'function' ? st.hint(auto) : st.hint) ?? '', piloted, true),
       state: i < this.step ? 'done' : i === this.step ? 'cur' : 'todo',
     }));
     this.hud.setSteps(L.num && L.id !== 'examen' ? `Leçon ${L.num} · ${L.title}` : L.title, views);
+  }
+
+  /** Adapte une consigne à la boîte à embrayage piloté (pas de pédale de gauche). */
+  private adapt(text: string, piloted: boolean, hint = false): string {
+    if (!piloted) return text;
+    if (hint) return /embrayage|[Dd]ébray|pédale de gauche/i.test(text) ? '' : text;
+    return text
+      .replace('Débrayez à fond et démarrez le moteur', 'Démarrez le moteur')
+      .replace('Relevez doucement l’embrayage jusqu’au point de patinage, puis accélérez légèrement', 'Accélérez doucement : l’embrayage est géré automatiquement')
+      .replace(', débrayez', '');
   }
 
   private replaceCar() {
@@ -567,7 +592,13 @@ export class Game implements MenuHost {
       const zone = sit.edge ? (sit.edge.living ? 'zone de rencontre' : sit.limit === 30 ? 'zone 30' : '') : 'hors chaussée';
       this.hud.setStreet(sit.street, zone);
       this.hud.setNav(this.follower && !this.follower.done ? this.follower.next() : null);
-      if (this.settings.minimap) this.hud.drawMinimap(this.net, c.x, c.z, c.heading, this.route, this.follower?.step ?? 0);
+      const next = this.follower && !this.follower.done ? this.follower.next() : null;
+      const cockpit = this.view.mode === 'cockpit';
+      this.hud.setCockpit(cockpit);
+      if (cockpit) {
+        this.hud.drawScreen(this.view.screenCanvas, this.net, c.x, c.z, c.heading, this.route, this.follower?.step ?? 0, next, sit.street, sit.limit);
+        this.view.refreshScreen();
+      } else if (this.settings.minimap) this.hud.drawMinimap(this.net, c.x, c.z, c.heading, this.route, this.follower?.step ?? 0);
     }
   }
 
@@ -606,8 +637,10 @@ export class Game implements MenuHost {
         setTimeout(() => { if (this.state === 'drive') this.quit(true); }, 2600);
       } else {
         const next = L.steps[this.step];
-        const text = typeof next.text === 'function' ? next.text(ctx.auto) : next.text;
-        if (L.theme === 'bases' || L.theme === 'allure') this.say(text + '.', `step_${L.id}_${this.step}`);
+        const piloted = c.mode === 'autoclutch';
+        const text = this.adapt(typeof next.text === 'function' ? next.text(ctx.auto) : next.text, piloted);
+        // l'enregistrement vocal correspond à la boîte manuelle : sinon, synthèse vocale
+        if (L.theme === 'bases' || L.theme === 'allure') this.say(text + '.', c.mode === 'manual' ? `step_${L.id}_${this.step}` : null);
       }
     }
   }

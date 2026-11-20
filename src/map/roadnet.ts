@@ -23,7 +23,8 @@ export interface MapFile {
   vertices: RawVertex[];
   edges: RawEdge[];
   restrictions: { kind: string; from: number; via: number; to: number }[];
-  chunks: Record<string, { r: RawPoly[]; w: RawPoly[]; a?: (RawPoly & { k: string })[] }>;
+  /** par dalle : chaussée (r), trottoirs (w), cœurs d'îlot (g), espaces verts et places (a) */
+  chunks: Record<string, { r: RawPoly[]; w: RawPoly[]; g?: RawPoly[]; a?: (RawPoly & { k: string })[] }>;
   buildings: RawBuilding[];
   barriers: { k: string; h: number; p: number[] }[];
   areas: { k: string; x: number; z: number; n: string }[];
