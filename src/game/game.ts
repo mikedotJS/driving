@@ -77,6 +77,8 @@ export class Game implements MenuHost {
   /** dernière cadence mesurée (images par seconde réelles) */
   fps = 0;
   private perfFixed = new URLSearchParams(location.search).get('perf') === 'fixe';
+  /** mesure de fluidité en cours : cadences relevées seconde par seconde */
+  private bench: number[] | null = null;
   private hudTimer = 0;
   private audioReady = false;
   private lastInstruction = '';
@@ -186,6 +188,7 @@ export class Game implements MenuHost {
     if (this.perfWall < 1) return;
     this.fps = this.perfFrames / this.perfWall;
     this.perfWall = 0; this.perfFrames = 0;
+    if (this.bench && this.state === 'drive') { this.bench.push(this.fps); if (this.bench.length >= 23) this.finishBenchmark(); return; }
     if (this.state !== 'drive' || !this.settings.autoQuality || this.perfFixed) { this.perfLow = this.perfHigh = 0; return; }
     this.perfLow = this.fps < 40 ? this.perfLow + 1 : 0;
     this.perfHigh = this.fps > 57 ? this.perfHigh + 1 : 0;
@@ -466,6 +469,41 @@ export class Game implements MenuHost {
       }
     }
     return { rows, total: Math.round(total * 2) / 2, eliminated };
+  }
+
+  // ───────────────────────── mesure de fluidité ─────────────────────────
+  /** Le moniteur conduit 20 s sur un boulevard pendant que l'on relève la cadence d'images réelle. */
+  benchmark() {
+    const lesson = LESSONS.find((l) => l.id === 'circulation') ?? FREE;
+    this.start(lesson);
+    this.perfLevel = 0; this.applySettings();
+    this.bench = [];
+    this.toggleDemo();
+    this.hud.coach('Mesure de la fluidité en cours…', 'Environ 20 secondes', false, 20);
+  }
+
+  private finishBenchmark() {
+    const samples = (this.bench ?? []).slice(3); // les premières secondes servent au chargement
+    this.bench = null;
+    this.demo = null; this.hud.setDemo(false);
+    this.ffb.stop(); this.voice.stop();
+    const avg = samples.reduce((a, b) => a + b, 0) / Math.max(1, samples.length), min = Math.min(...samples);
+    const gl = this.renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'inconnue';
+    const info = this.renderer.info.render;
+    const verdict = min >= 55 ? 'Très fluide : vous pouvez essayer la qualité « Haute ».'
+      : avg >= 40 ? 'Fluide : ce réglage convient.'
+      : avg >= 25 ? 'Juste : passez en qualité « Basse » ou laissez la fluidité automatique alléger l’affichage.'
+      : 'Insuffisant : choisissez la qualité « Basse » et coupez les rétroviseurs ; vérifiez que le navigateur utilise bien la carte graphique.';
+    this.state = 'menu'; this.hud.show(false);
+    this.menuCenter = { x: this.player.car.x, z: this.player.car.z };
+    this.menus.report('Mesure de la fluidité', [
+      `Cadence moyenne : ${avg.toFixed(avg < 10 ? 1 : 0)} images par seconde (minimum ${min.toFixed(min < 10 ? 1 : 0)}) sur ${samples.length} relevés en conduite.`,
+      `Carte graphique : ${gpu}`,
+      `Qualité « ${this.settings.quality} », ${this.renderer.domElement.width} × ${this.renderer.domElement.height} points, rétroviseurs ${this.settings.mirrors ? 'actifs' : 'coupés'} ; ${info.calls} appels de dessin, ${Math.round(info.triangles / 1000)} milliers de triangles.`,
+      verdict,
+    ], () => this.menus.settings('jeu'));
   }
 
   // ───────────────────────── démonstration du moniteur ─────────────────────────

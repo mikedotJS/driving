@@ -50,8 +50,9 @@ avec un **G923 émulé** (`tests/volant.test.ts`, 10 tests) :
     fonction `21`, force sur 16 bits aux octets 6 et 7 des paramètres.
 
 Ce qui reste invérifiable sans matériel : le **sens** de l'effort — aucun des deux pilotes n'indique de
-quel côté de la valeur neutre le volant part à droite ; une case « Inverser » et un bouton « Tester »
-sont prévus pour cela —, l'acceptation par le navigateur du rapport `30` de changement de mode, et le
+quel côté de la valeur neutre le volant part à droite. Le jeu n'a donc pas besoin de le savoir : après
+« Tester », il demande de quel côté le volant est parti et inverse le sens s'il le faut. Restent à
+constater sur le matériel l'acceptation par le navigateur du rapport `30` de changement de mode, et le
 ressenti.
 
 ## 3. Le Code de la route
@@ -107,6 +108,11 @@ réelle et, si elle reste sous 40 images par seconde pendant 3 s, allège l'affi
 au-dessus de 57 images par seconde. Vérifié dans le navigateur : sur le rendu logiciel, il descend au
 dernier cran et la cadence mesurée passe de 0,24 à 0,67 image par seconde. Il se désactive dans
 *Réglages → Fluidité automatique* (ou avec `?perf=fixe` dans l'adresse).
+
+Pour connaître la cadence sur votre machine : *Réglages → Mesurer la fluidité*. Le moniteur conduit
+20 secondes sur un boulevard, puis le jeu affiche la cadence moyenne et minimale, le nom de la carte
+graphique utilisée par le navigateur et un conseil de réglage (rapport copiable). Essayée ici de bout en
+bout, la mesure identifie bien le rendu logiciel et le signale.
 
 ## 6. Captures
 

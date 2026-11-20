@@ -26,7 +26,9 @@ Pour une version optimisée : `npm run build` puis `npm run preview`.
 4. *Boîte de vitesses* : « Manuelle » utilise la **pédale d'embrayage** (point de patinage, calage) ;
    cochez « Levier en H » si vous avez le Driving Force Shifter, sinon les palettes changent de rapport.
 5. **Retour de force** (facultatif) : *Connecter le volant…* ouvre la fenêtre WebHID du navigateur.
-   Cliquez sur *Tester* : le volant doit partir vers la droite, sinon cochez « Inverser ».
+   Cliquez sur *Tester* : le jeu vous demande de quel côté le volant est parti et règle le sens tout seul.
+6. **Fluidité** : *Réglages → Mesurer la fluidité* fait conduire le moniteur 20 secondes et affiche la
+   cadence d'images de votre machine, le nom de la carte graphique et un conseil de réglage.
 
 > Le retour de force **n'a pas pu être essayé sur un volant réel** depuis l'environnement de
 > développement. Il est vérifié avec un G923 émulé : les trames envoyées sont celles des pilotes Linux,

@@ -23,6 +23,8 @@ export interface MenuHost {
   audioTest?(): void;
   /** le moniteur prend le volant pour montrer */
   toggleDemo?(): void;
+  /** mesure la cadence d'images pendant 20 s de conduite, puis affiche un rapport */
+  benchmark?(): void;
 }
 
 export interface Bilan {
@@ -134,9 +136,9 @@ export class Menus {
       field('Retour de force', 'Connexion directe au volant par WebHID. Expérimental : n’a pas pu être essayé sur un volant réel — commencez avec une force modérée.',
         h('span', { class: 'row' },
           h('button', { class: 'btn', onclick: async () => { await ffb.connect(); this.settings('volant', back); } }, ffb.connected ? 'Reconnecter' : 'Connecter le volant…'),
-          h('button', { class: 'btn', disabled: !ffb.connected, onclick: () => ffb.test() }, 'Tester'))),
+          h('button', { class: 'btn', disabled: !ffb.connected, onclick: async () => { await ffb.test(); this.ffbDirection(() => this.settings('volant', back)); } }, 'Tester'))),
       ffb.lastError ? h('p', { class: 'note', style: 'color:#ffb0b0' }, ffb.lastError) : null,
-      field('Force', 'Le test doit pousser le volant vers la droite ; sinon cochez « Inverser ».',
+      field('Force', 'Après « Tester », le jeu vous demande de quel côté le volant est parti et règle le sens tout seul.',
         range(ffb.settings.gain, 0, 1, 0.05, (v) => { ffb.settings.gain = v; ffb.saveSettings(); }, (v) => `${Math.round(v * 100)} %`)),
       field('Inverser le sens du retour de force', '', check(ffb.settings.invert, (v) => { ffb.settings.invert = v; ffb.saveSettings(); })),
       field('Amortissement', 'Stabilise le volant en ligne droite.', range(ffb.settings.damping, 0, 1, 0.05, (v) => { ffb.settings.damping = v; ffb.saveSettings(); }, (v) => `${Math.round(v * 100)} %`)),
@@ -148,6 +150,8 @@ export class Menus {
       field('Qualité d’affichage', 'Ombres, résolution, distance d’affichage.', select(s.quality, [['basse', 'Basse'], ['moyenne', 'Moyenne'], ['haute', 'Haute']], (v) => { s.quality = v; })),
       field('Fluidité automatique', 'Sous 40 images par seconde, le jeu réduit de lui-même la résolution et la distance d’affichage (puis les rétroviseurs en dernier recours), et les rétablit quand la cadence remonte.', check(s.autoQuality, (v) => { s.autoQuality = v; })),
       field('Rétroviseurs', 'Trois rétroviseurs calculés en temps réel (coûteux sur les petites cartes graphiques).', check(s.mirrors, (v) => { s.mirrors = v; })),
+      field('Mesurer la fluidité', 'Le moniteur conduit 20 secondes sur un boulevard pendant que le jeu mesure la cadence d’images de votre machine, puis affiche un rapport.',
+        h('button', { class: 'btn', disabled: !this.host.benchmark, onclick: () => { this.host.applySettings(); this.host.benchmark?.(); } }, 'Lancer la mesure (20 s)')),
       field('Champ de vision', '', range(s.fov, 40, 85, 1, (v) => { s.fov = v; }, (v) => `${v}°`)),
       field('Regard vers l’intérieur des virages', 'La tête accompagne le volant, utile sur un seul écran.', range(s.lookIntoTurns, 0, 1, 0.05, (v) => { s.lookIntoTurns = v; }, (v) => `${Math.round(v * 100)} %`)),
       field('Circulation', '', select(s.traffic, [['faible', 'Faible'], ['normal', 'Normale'], ['dense', 'Dense']], (v) => { s.traffic = v; })),
@@ -268,6 +272,38 @@ export class Menus {
   }
 
   // ───────────────────────── aide ─────────────────────────
+  /** Après l'impulsion de test : de quel côté le volant est-il parti ? Le sens du retour de force se règle en conséquence. */
+  ffbDirection(back: () => void) {
+    const ffb = this.host.ffb;
+    this.mount(h('div', { class: 'menu panel narrow' },
+      h('h2', null, 'Test du retour de force'),
+      h('p', { class: 'sub' }, 'Le volant vient de recevoir une poussée d’une demi-seconde. De quel côté est-il parti ?'),
+      h('div', { class: 'grid' },
+        h('button', { class: 'card', onclick: () => back() }, h('h3', null, 'Vers la droite'), h('p', null, 'C’est le bon sens : rien à changer.')),
+        h('button', { class: 'card', onclick: async () => { ffb.settings.invert = !ffb.settings.invert; ffb.saveSettings(); await ffb.test(); this.ffbDirection(back); } }, h('h3', null, 'Vers la gauche'), h('p', null, 'Le sens est inversé puis le test est rejoué.')),
+        h('button', { class: 'card', onclick: async () => { await ffb.test(); this.ffbDirection(back); } }, h('h3', null, 'Rejouer le test')),
+        h('button', { class: 'card', onclick: () => this.report('Le volant n’a pas bougé', [
+          'Vérifiez que le volant est alimenté par son bloc secteur (sans lui, il n’a pas de moteur).',
+          'Montez le réglage « Force » et relancez le test.',
+          'Si le volant était en mode PlayStation, il a pu se reconnecter : cliquez de nouveau sur « Connecter le volant ».',
+          'Fermez les autres jeux ou logiciels qui pilotent le volant, puis reconnectez-le.',
+          'Sans retour de force, le jeu reste jouable : activez le ressort de centrage dans G HUB.',
+        ], back) }, h('h3', null, 'Il n’a pas bougé'))),
+    ));
+  }
+
+  /** Panneau d'information simple (rapport de mesure, conseils), avec copie dans le presse-papiers. */
+  report(title: string, lines: string[], back: () => void = () => this.main()) {
+    const text = [title, ...lines].join('\n');
+    this.mount(h('div', { class: 'menu panel narrow' },
+      h('h2', null, title),
+      ...lines.map((l) => h('p', { class: 'note', style: 'margin:6px 0' }, l)),
+      h('div', { class: 'row', style: 'margin-top:16px' },
+        h('button', { class: 'btn primary', onclick: () => back() }, '← Retour'),
+        h('button', { class: 'btn', onclick: () => { void navigator.clipboard?.writeText(text); } }, 'Copier le rapport')),
+    ));
+  }
+
   help(back: () => void = () => this.main()) {
     const k = (s: string) => h('kbd', null, s);
     const row = (label: string, ...keys: (string | Node)[]) => h('tr', null, h('td', null, label), h('td', null, ...keys));
