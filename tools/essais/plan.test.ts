@@ -6,7 +6,7 @@ import { RoadNet, type MapFile } from '../../src/map/roadnet';
 import { Ground } from '../../src/world/ground';
 import { Player } from '../../src/game/player';
 import { Autopilot } from '../../src/game/autopilot';
-import { START_STREETS, planRoute, startOnStreet, type Theme } from '../../src/game/lessons';
+import { planLesson, type Theme } from '../../src/game/lessons';
 import type { InputState, Action } from '../../src/input/controls';
 
 const map = JSON.parse(readFileSync(new URL('../../public/maps/montreuil.json', import.meta.url), 'utf8')) as MapFile;
@@ -16,8 +16,9 @@ const ground = new Ground(map);
 it('plan', () => {
   const theme: Theme = (process.env.THEME as Theme) ?? 'pietons';
   const seed = +(process.env.SEED ?? 3), target = +(process.env.SEG ?? 5);
-  const pose = START_STREETS[theme].map((n) => startOnStreet(net, n, 0.25)).find(Boolean)!;
-  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z), (x, z, fx, fz) => ground.bodyHits(x, z, fx, fz)) === 0; })!;
+  // même choix que le jeu : la rue de départ du thème dont le parcours se prend le plus proprement
+  const { pose, route: planned } = planLesson(net, theme, seed, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z), (x, z, fx, fz) => ground.bodyHits(x, z, fx, fz)); })!;
+  const route = planned!;
   const ap = new Autopilot(net, null, route);
   if (!process.env.SANS_AJUSTEMENT) ap.fitToRoad((x, z) => ground.isRoad(x, z));
   const A = ap as any;

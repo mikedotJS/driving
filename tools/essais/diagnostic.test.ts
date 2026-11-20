@@ -7,7 +7,7 @@ import { Traffic } from '../../src/traffic/traffic';
 import { RulesEngine, type PlayerState } from '../../src/rules/engine';
 import { Player } from '../../src/game/player';
 import { Autopilot } from '../../src/game/autopilot';
-import { START_STREETS, planRoute, startOnStreet, type Theme } from '../../src/game/lessons';
+import { planLesson, type Theme } from '../../src/game/lessons';
 import type { InputState, Action } from '../../src/input/controls';
 
 const map = JSON.parse(readFileSync(new URL('../../public/maps/montreuil.json', import.meta.url), 'utf8')) as MapFile;
@@ -17,8 +17,9 @@ const ground = new Ground(map);
 it('diagnostic', () => {
   const theme: Theme = (process.env.THEME as Theme) ?? 'tournants';
   const seed = +(process.env.SEED ?? 7);
-  const pose = START_STREETS[theme].map((n) => startOnStreet(net, n, 0.25)).find(Boolean)!;
-  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z), (x, z, fx, fz) => ground.bodyHits(x, z, fx, fz)) === 0; })!;
+  // même choix que le jeu : la rue de départ du thème dont le parcours se prend le plus proprement
+  const { pose, route: planned } = planLesson(net, theme, seed, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z), (x, z, fx, fz) => ground.bodyHits(x, z, fx, fz)); })!;
+  const route = planned!;
   const traffic = new Traffic(net, { vehicles: 28, pedestrians: 22, seed });
   const rules = new RulesEngine(net, traffic);
   const player = new Player(ground, net, traffic);
@@ -48,6 +49,11 @@ it('diagnostic', () => {
       out.push(`CHOC ${kind}@${(speed * 3.6).toFixed(0)} ${ctx()}`);
       const T = traffic as any;
       const fx = Math.sin(player.car.heading), fz = -Math.cos(player.car.heading);
+      for (const b of traffic.cyclists) {
+        const dx = b.x - player.car.x, dz = b.z - player.car.z;
+        if (Math.hypot(dx, dz) > 9) continue;
+        out.push(`    cycliste ${b.id} devant=${(dx * fx + dz * fz).toFixed(1)} côté=${(dx * -fz + dz * fx).toFixed(1)} cap relatif=${(((b.heading - player.car.heading) * 180 / Math.PI + 540) % 360 - 180).toFixed(0)}° v=${(b.v * 3.6).toFixed(0)}km/h ${b.conn ? 'raccord entre deux bandes' : 'bande ' + b.lane.edge.name} s=${b.s.toFixed(1)}/${(b.conn ?? b.lane.line).length.toFixed(1)} touché=${b.hit}`);
+      }
       for (const o of traffic.vehicles) {
         const dx = o.x - player.car.x, dz = o.z - player.car.z;
         if (Math.hypot(dx, dz) > 7) continue;

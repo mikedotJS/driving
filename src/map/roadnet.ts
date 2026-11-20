@@ -733,8 +733,12 @@ export class RoadNet {
       if (heading !== undefined) {
         const eh = Math.atan2(p.tx, -p.tz);
         let da = Math.abs(wrapAngle(heading - eh));
-        if (da > Math.PI / 2) da = Math.PI - da; // sens indifférent
+        const along = da <= Math.PI / 2;
+        if (!along) da = Math.PI - da; // sens indifférent pour l'alignement
         score += da * 3.0;
+        // deux chaussées à sens unique qui se recouvrent (grande place) : à égalité, le véhicule est sur
+        // celle qui va dans son sens, pas à contresens sur l'autre
+        if (e.oneway && !(along ? e.lanesF : e.lanesB).some((l) => l.kind !== 'C')) score += 2.0;
       }
       if (clamped) score += 1.0;
       if (e === prefer) score -= 1.2;

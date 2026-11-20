@@ -6,7 +6,7 @@ import { Traffic } from '../src/traffic/traffic';
 import { RulesEngine, type PlayerState } from '../src/rules/engine';
 import { Player } from '../src/game/player';
 import { Autopilot } from '../src/game/autopilot';
-import { START_STREETS, planRoute, startOnStreet, type Theme } from '../src/game/lessons';
+import { planLesson, type Theme } from '../src/game/lessons';
 import type { InputState, Action } from '../src/input/controls';
 
 const map = JSON.parse(readFileSync(new URL('../public/maps/montreuil.json', import.meta.url), 'utf8')) as MapFile;
@@ -15,8 +15,9 @@ const ground = new Ground(map);
 
 /** Fait conduire le pilote automatique sur un itinéraire de leçon, avec circulation et piétons. */
 export function autoDrive(theme: Theme, seed: number, vehicles = 28, maxTime = 600, verbose = false) {
-  const pose = START_STREETS[theme].map((n) => startOnStreet(net, n, 0.25)).find(Boolean)!;
-  const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z), (x, z, fx, fz) => ground.bodyHits(x, z, fx, fz)) === 0; })!;
+  // même choix que le jeu : la rue de départ du thème dont le parcours se prend le plus proprement
+  const { pose, route: planned } = planLesson(net, theme, seed, (r) => { const a = new Autopilot(net, null, r); a.fitToRoad((x, z) => ground.isRoad(x, z)); return a.pathIssues((x, z) => ground.isRoad(x, z), (x, z, fx, fz) => ground.bodyHits(x, z, fx, fz)); })!;
+  const route = planned!;
   const traffic = new Traffic(net, { vehicles, pedestrians: 22, seed });
   const rules = new RulesEngine(net, traffic);
   const player = new Player(ground, net, traffic);

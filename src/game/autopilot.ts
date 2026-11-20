@@ -508,7 +508,8 @@ export class Autopilot {
       let ax: number, az: number, bx: number, bz: number;
       if (b.conn) { const p0 = b.conn.at(b.s), p1 = b.conn.at(b.conn.length); ax = p0.x; az = p0.z; bx = p1.x; bz = p1.z; }
       else {
-        if (!b.nextLane || b.lane.endRef.vertex !== link.vertex || b.lane.line.length - b.s > 22 || b.v < 0.3) continue;
+        // (la bande cyclable peut appartenir à une autre branche que la nôtre : seule la géométrie compte)
+        if (!b.nextLane || b.lane.line.length - b.s > 22 || b.v < 0.3) continue;
         const p0 = b.lane.line.at(b.s), p1 = b.nextLane.line.at(0);
         ax = p0.x; az = p0.z; bx = p1.x; bz = p1.z;
       }
@@ -697,6 +698,8 @@ export class Autopilot {
       const fx = Math.sin(o.heading), fz = -Math.cos(o.heading), r = o.width / 2 + 0.1;
       speed = o.v;
       for (const k of [-0.32, 0, 0.32]) test(o.x + fx * o.length * k, o.z + fz * o.length * k, r);
+      // véhicule à l'arrêt : on couvre aussi ses coins — on ne repart pas en frôlant l'angle d'une carrosserie
+      if (o.v < 0.5) for (const k of [-0.44, 0.44]) test(o.x + fx * o.length * k, o.z + fz * o.length * k, r - 0.1);
     }
     slack = 1.05; speed = 0;
     // cyclistes : on ne dépasse que si l'on peut laisser un mètre, sinon on reste derrière (R414-4)

@@ -214,7 +214,7 @@ function score(theme: Theme, r: Route): number {
  * `check` (facultatif) valide un itinéraire candidat — le jeu s'en sert pour ne retenir que des parcours
  * dont chaque virage est praticable sans toucher une bordure (voir Autopilot.pathIssues).
  */
-export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: Theme, seed: number, range?: [number, number], check?: (r: Route) => boolean): Route | null {
+export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: Theme, seed: number, range?: [number, number], check?: (r: Route) => boolean | number): Route | null {
   const rng = new Rng(seed);
   const p = from.edge.line.at(fromS);
   const found: { r: Route; sc: number }[] = [];
@@ -228,9 +228,16 @@ export function planRoute(net: RoadNet, from: RouteStep, fromS: number, theme: T
   }
   found.sort((a, b) => b.sc - a.sc);
   if (!check) return found[0]?.r ?? null;
-  // le meilleur candidat dont tous les virages sont praticables (au pire, le meilleur tout court)
-  for (const c of found.slice(0, 8)) if (check(c.r)) return c.r;
-  return found[0]?.r ?? null;
+  // le meilleur candidat dont tous les virages sont praticables ; à défaut, celui qui compte le moins de
+  // passages délicats (`check` peut renvoyer leur nombre)
+  let best: Route | null = null, least = Infinity;
+  for (const c of found.slice(0, 8)) {
+    const res = check(c.r);
+    const n = res === true ? 0 : res === false ? 1 : res;
+    if (n < least) { least = n; best = c.r; }
+    if (n === 0) break;
+  }
+  return best ?? found[0]?.r ?? null;
 }
 
 /**
@@ -259,7 +266,7 @@ export function drivable(route: Route): boolean {
 }
 
 /** Itinéraire d'examen : plusieurs tronçons variés enchaînés. */
-export function planExam(net: RoadNet, from: RouteStep, fromS: number, seed: number, check?: (r: Route) => boolean): Route | null {
+export function planExam(net: RoadNet, from: RouteStep, fromS: number, seed: number, check?: (r: Route) => boolean | number): Route | null {
   const themes: Theme[] = ['priorite', 'feux', 'circulation'];
   let cur = from, s = fromS;
   const steps: RouteStep[] = [];
@@ -324,3 +331,24 @@ export const START_STREETS: Record<Theme, string[]> = {
   examen: ['Boulevard Rouget de Lisle', 'Avenue Pasteur', 'Rue de Paris'],
   libre: ['Boulevard Rouget de Lisle', 'Rue de Paris'],
 };
+
+/**
+ * Départ et itinéraire d'une leçon guidée : parmi les rues de départ du thème (essayées dans un ordre qui
+ * dépend du tirage), on retient celle dont le parcours comporte le moins de passages délicats — un virage
+ * trop serré pour être pris proprement dès la sortie du stationnement fait changer de rue de départ.
+ */
+export function planLesson(net: RoadNet, theme: Theme, seed: number, check?: (r: Route) => boolean | number): { pose: StartPose; route: Route | null } | null {
+  const names = START_STREETS[theme];
+  let best: { pose: StartPose; route: Route | null } | null = null, least = Infinity;
+  for (let i = 0; i < names.length; i++) {
+    const pose = startOnStreet(net, names[(seed + i) % names.length], 0.25);
+    if (!pose) continue;
+    const route = planRoute(net, { edge: pose.edge, dir: pose.dir }, pose.s, theme, seed, undefined, check);
+    if (!route) { if (!best) best = { pose, route }; continue; }
+    const res = check ? check(route) : 0;
+    const n = res === true ? 0 : res === false ? 1 : res;
+    if (n < least) { least = n; best = { pose, route }; }
+    if (n === 0) break;
+  }
+  return best;
+}

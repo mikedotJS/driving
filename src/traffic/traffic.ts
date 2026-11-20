@@ -152,6 +152,7 @@ export class Traffic {
   private clash = new Map<LaneLink, Set<LaneLink>>();
   private cycleLanes: Lane[] = [];
   private drivable: Lane[];
+  private deadLanes = new Set<Lane>();
   opts: TrafficOptions;
   /** événements à destination des règles */
   onForcedBrake?: (v: Vehicle) => void;
@@ -159,7 +160,17 @@ export class Traffic {
   constructor(readonly net: RoadNet, opts: Partial<TrafficOptions> = {}) {
     this.opts = { vehicles: 34, pedestrians: 26, cyclists: 5, seed: 7, ...opts };
     this.rng = new Rng(this.opts.seed);
-    this.drivable = net.lanes.filter((l) => l.kind === 'L' && l.line.length > 12 && l.links.length > 0);
+    // voies sans issue : celles qui ne mènent nulle part (moignon, impasse), et de proche en proche celles
+    // qui ne mènent qu'à elles. La circulation ne s'y engage pas : elle ne pourrait pas en ressortir.
+    for (const l of net.lanes) if (l.kind !== 'C' && !l.links.length && !l.to.exit) this.deadLanes.add(l);
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const l of net.lanes) {
+        if (this.deadLanes.has(l) || l.kind === 'C' || !l.links.length) continue;
+        if (l.links.every((k) => this.deadLanes.has(k.to))) { this.deadLanes.add(l); changed = true; }
+      }
+    }
+    this.drivable = net.lanes.filter((l) => l.kind === 'L' && l.line.length > 12 && l.links.length > 0 && !this.deadLanes.has(l));
     this.cycleLanes = net.lanes.filter((l) => l.kind === 'C' && l.line.length > 35);
     this.buildClusters();
   }
@@ -343,6 +354,7 @@ export class Traffic {
       if (avoid && avoid.has(l.to)) w *= 0.001;
       // un autobus ne s'engage pas dans un virage serré : sa caisse balaierait la voie d'à côté
       if (kind === 'bus' && Math.abs(l.angle) > 0.7 && l.line.length / Math.abs(l.angle) < 13) w *= 0.02;
+      if (this.deadLanes.has(l.to)) w *= 0.0005;
       if (l.to.to.dead) w *= 0.05;
       if (l.to.edge.cls === 'service' || l.to.edge.living) w *= 0.4;
       if (!l.to.links.length && !l.to.to.exit) w *= 0.05;
@@ -424,7 +436,9 @@ export class Traffic {
     // si l'on risque de rester immobilisé dans le carrefour)
     let queue = v.length + 2;
     for (const o of holders) if (o !== v && this.exitOf(o) === exit) queue += o.length + 2;
-    if (exit !== v.lane && !this.exitFits(exit, queue)) return false;
+    // (deux voies courtes dont chaque occupant attend que l'autre libère la sienne : au bout d'une longue
+    // attente, l'un des deux s'avance derrière l'autre pour dénouer la situation)
+    if (exit !== v.lane && !this.exitFits(exit, queue) && v.waiting < 25 + (v.id % 5) * 4) return false;
     // personne d'arrêté sur notre trajet
     if (this.stoppedOn(mine)) return false;
     // chacun son tour : celui qui patiente depuis plus longtemps à une autre entrée, pour un trajet qui gêne
@@ -610,7 +624,8 @@ export class Traffic {
       if (playerAhead < 8 && v.v < 0.6 && still) v.playerWait += dt;
       else if (playerAhead === Infinity || !still) v.playerWait = 0;
       let target = 0;
-      if (still && v.playerWait > 5 && playerAhead < 12) {
+      // (jamais au milieu d'un carrefour : le joueur y est en pleine manœuvre, sa caisse va pivoter)
+      if (still && v.playerWait > 5 && playerAhead < 12 && !player.inJunction) {
         const need = this.playerOverlap(v, player);
         if (need !== 0 && Math.abs(need) <= 0.85) target = need;
       }
@@ -629,7 +644,8 @@ export class Traffic {
         v.backing = Math.min(4, Math.max(0, v.s - 0.3));
       }
       if (v.backing > 0) {
-        if (!still || !this.rearFree(v)) v.backing = 0;
+        // (le joueur qui redémarre ne nous arrête pas : on achève de lui faire la place)
+        if (!this.rearFree(v)) v.backing = 0;
         else {
           const ds = Math.min(v.backing, 0.9 * dt);
           v.s -= ds; v.backing -= ds; v.wheelPhase -= ds;
@@ -756,8 +772,9 @@ export class Traffic {
       } else if (v.next) {
         v.link = v.next; v.lane = null; v.next = null; v.s = over;
       } else {
-        // sortie de carte ou impasse
-        if (v.lane!.to.exit) v.alive = false;
+        // sortie de carte, ou impasse : arrivé au bout d'une voie sans issue, le véhicule quitte la
+        // simulation après quelques secondes (il s'est garé) plutôt que d'y rester en travers du chemin
+        if (v.lane!.to.exit || v.still > 6) v.alive = false;
         v.s = L.length; v.v = 0;
       }
     }
@@ -844,7 +861,8 @@ export class Traffic {
       const pr = line.project(p.x, p.z);
       if (pr.s <= sFrom - 0.5 || pr.s >= line.length - 0.01) return;
       const ca = Math.abs(Math.sin(p.heading) * pr.tx - Math.cos(p.heading) * pr.tz);
-      const ext = p.width / 2 + (p.length / 2 - p.width / 2) * (1 - ca);
+      // demi-encombrement d'une caisse de biais, coins compris
+      const ext = (p.length / 2) * Math.sqrt(Math.max(0, 1 - ca * ca)) + (p.width / 2) * ca;
       const need = v.width / 2 + ext + 0.3 - Math.abs(pr.d);
       const along = offset + pr.s - sFrom;
       if (need > 0 && along < bestS) { bestS = along; best = pr.d > 0 ? -need : need; }
@@ -871,10 +889,11 @@ export class Traffic {
       if (pr.s <= sFrom - 0.5) return;
       // largeur occupée par le joueur perpendiculairement à la trajectoire
       const ca = Math.abs(Math.sin(p.heading) * pr.tx - Math.cos(p.heading) * pr.tz);
-      const ext = p.width / 2 + (p.length / 2 - p.width / 2) * (1 - ca);
+      // demi-encombrement d'une caisse de biais, coins compris
+      const ext = (p.length / 2) * Math.sqrt(Math.max(0, 1 - ca * ca)) + (p.width / 2) * ca;
       if (Math.abs(pr.d) > halfW - p.width / 2 + ext) return;
       if (pr.s >= line.length - 0.01 && Math.hypot(p.x - pr.x, p.z - pr.z) > reach + 1) return;
-      const along = p.length / 2 * ca + (p.width / 2) * (1 - ca);
+      const along = (p.length / 2) * ca + (p.width / 2) * Math.sqrt(Math.max(0, 1 - ca * ca));
       best = Math.min(best, offset + pr.s - sFrom - along);
     };
     test(v.path, v.s, 0);
@@ -1139,7 +1158,7 @@ export class Traffic {
           // sans feu : on passe quand rien ne bouge dans le carrefour
           const V = end.vertex;
           for (const o of this.vehicles) if (o.v > 1 && ((o.link && o.link.vertex === V) || (o.lane && o.lane.to === V && o.lane.line.length - o.s < 12 && o.lane.edge !== lane.edge))) { hold = true; break; }
-          if (player && player.inJunction === V && Math.abs(player.speed) > 1) hold = true;
+          if (player && Math.abs(player.speed) > 1 && (player.inJunction === V || (player.approach && player.approach.vertex === V && player.approachDist < 10))) hold = true;
         }
         if (hold) stop = Math.min(stop, dEnd);
       }
@@ -1147,8 +1166,29 @@ export class Traffic {
     // la voiture du joueur en travers de la bande
     if (player) {
       const pr = L.project(player.x, player.z);
-      const d = pr.s - c.s - player.length / 2;
-      if (Math.abs(pr.d) < 1.3 && d > -0.5 && d < 10 && pr.s < L.length - 0.01) stop = Math.min(stop, Math.max(0, d - 1));
+      // encombrement de la voiture vu depuis la bande : en travers, c'est toute sa longueur qui barre le passage
+      const ca = Math.abs(Math.sin(player.heading) * pr.tx - Math.cos(player.heading) * pr.tz), sa = Math.sqrt(Math.max(0, 1 - ca * ca));
+      const wide = (player.length / 2) * sa + (player.width / 2) * ca, deep = (player.length / 2) * ca + (player.width / 2) * sa;
+      const d = pr.s - c.s - deep;
+      if (Math.abs(pr.d) < wide + 0.6 && d > -0.5 && d < 10 && pr.s < L.length - 0.01) stop = Math.min(stop, Math.max(0, d - 1));
+    }
+    // la voiture du joueur va couper la traversée (fin de bande → bande suivante) dans les secondes qui
+    // viennent : le cycliste, qui tient à sa peau, attend au bord ou s'arrête avant le point de rencontre
+    if (player && Math.abs(player.speed) > 1 && (c.conn || (c.nextLane && rem < 14))) {
+      const a = c.conn ? c.conn.at(c.s) : L.at(L.length), b = c.conn ? c.conn.at(c.conn.length) : c.nextLane!.line.at(0);
+      const ax = a.x, az = a.z, ux = b.x - ax, uz = b.z - az, len2 = ux * ux + uz * uz;
+      if (len2 > 0.25) {
+        const sg = player.speed >= 0 ? 1 : -1, sp = Math.abs(player.speed);
+        const hx = Math.sin(player.heading) * sg, hz = -Math.cos(player.heading) * sg;
+        for (const t of [0, 0.5, 1, 1.5, 2, 2.5]) {
+          const qx = player.x + hx * sp * t - ax, qz = player.z + hz * sp * t - az;
+          const k = clamp((qx * ux + qz * uz) / len2, 0, 1);
+          if (Math.hypot(qx - ux * k, qz - uz * k) < 2.6) {
+            stop = Math.min(stop, c.conn ? Math.max(0, k * Math.sqrt(len2) - 2.6) : Math.max(0, rem - 2.5));
+            break;
+          }
+        }
+      }
     }
     let vt = c.cruise;
     if (stop < Infinity) vt = Math.min(vt, Math.sqrt(2 * 1.6 * Math.max(0, stop - 0.3)));
@@ -1336,6 +1376,14 @@ export class Traffic {
     // un piéton pressé accepte un créneau plus court ; au feu vert piéton, il s'engage si les voitures sont arrêtées
     const need = c.controller ? 1.2 : 2.2 + (1 - p.assertive) * 2.2;
     const check = (x: number, z: number, hx: number, hz: number, speed: number): boolean => {
+      // un véhicule en mouvement sur le passage ou à ses abords immédiats, maintenant ou dans la seconde qui
+      // vient : on ne descend pas du trottoir, quel que soit son cap (il peut être en train de tourner)
+      if (speed >= 0.5) {
+        for (const t of [0, 0.7, 1.4]) {
+          const qx = x + hx * speed * t - c.x, qz = z + hz * speed * t - c.z;
+          if (Math.abs(qx * c.tx + qz * c.tz) < c.halfLen + 3 && Math.abs(qx * -c.tz + qz * c.tx) < c.edge.half + 1.5) return false;
+        }
+      }
       const rx = c.x - x, rz = c.z - z;
       const along = rx * hx + rz * hz; // distance jusqu'au passage dans le sens de marche du véhicule
       const lat = Math.abs(rx * -hz + rz * hx);

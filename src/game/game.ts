@@ -22,7 +22,7 @@ import { Menus, type Bilan, type MenuHost } from '../ui/menus';
 import { CarAudio } from '../audio/car-audio';
 import { Voice } from '../audio/voice';
 import { loadSettings, saveSettings, TRAFFIC_COUNTS, type Settings } from './settings';
-import { EXAM, FREE, LESSONS, START_STREETS, planExam, planRoute, poseOn, quietStreet, startOnStreet, type Lesson, type LessonCtx, type StartPose } from './lessons';
+import { EXAM, FREE, LESSONS, START_STREETS, planExam, planLesson, planRoute, poseOn, quietStreet, startOnStreet, type Lesson, type LessonCtx, type StartPose } from './lessons';
 import { findRoute, RouteFollower, type Route } from '../map/route';
 import { Autopilot } from './autopilot';
 import { drawQuiz } from './quiz';
@@ -327,10 +327,15 @@ export class Game implements MenuHost {
     this.applySettings();
 
     // point de départ
+    // on ne retient que des parcours dont chaque virage est praticable sans toucher une bordure ni un mur
+    const clean = (r: Route) => { const ap = new Autopilot(this.net, null, r); ap.fitToRoad((x, z) => this.ground.isRoad(x, z)); return ap.pathIssues((x, z) => this.ground.isRoad(x, z), (x, z, fx, fz) => this.ground.bodyHits(x, z, fx, fz)); };
+    const guided = lesson.steps.some((st) => st.text === 'Suivez les indications du moniteur jusqu’à l’arrivée');
     let pose: StartPose | null = null;
     if (lesson.theme === 'bases' || lesson.theme === 'allure') pose = quietStreet(this.net, 1080, -480);
     else {
       const names = START_STREETS[lesson.theme];
+      // leçon guidée : la rue de départ est celle dont le parcours se prend le plus proprement
+      if (lesson.theme !== 'examen' && guided) pose = planLesson(this.net, lesson.theme, seed, clean)?.pose ?? null;
       for (let i = 0; i < names.length && !pose; i++) pose = startOnStreet(this.net, names[(seed + i) % names.length], 0.25);
     }
     pose ??= quietStreet(this.net, 1080, -480) ?? poseOn(this.net.edges[0], 1, this.net.edges[0].length / 2);
@@ -343,10 +348,8 @@ export class Game implements MenuHost {
 
     // itinéraire
     this.route = null; this.follower = null; this.demo = null; this.handover = 0; this.hud.setDemo(false);
-    // on ne retient que des parcours dont chaque virage est praticable sans toucher une bordure
-    const clean = (r: Route) => { const ap = new Autopilot(this.net, null, r); ap.fitToRoad((x, z) => this.ground.isRoad(x, z)); return ap.pathIssues((x, z) => this.ground.isRoad(x, z), (x, z, fx, fz) => this.ground.bodyHits(x, z, fx, fz)) === 0; };
     if (lesson.theme === 'examen') this.route = planExam(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, seed, clean);
-    else if (lesson.steps.some((st) => st.text === 'Suivez les indications du moniteur jusqu’à l’arrivée')) this.route = planRoute(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, lesson.theme, seed, undefined, clean);
+    else if (guided) this.route = planRoute(this.net, { edge: pose.edge, dir: pose.dir }, pose.s, lesson.theme, seed, undefined, clean);
     if (this.route) this.follower = new RouteFollower(this.route);
     this.step = 0;
     this.ctx = { player: P, sit: this.rules.situation, input: this.controls.state, t: 0, dist: 0, mem: {}, auto: P.car.mode === 'auto', routeDone: false };
