@@ -504,15 +504,27 @@ export class RulesEngine {
     if (theirs > mine) return true;
     if (theirs < mine) return false;
     if (end.control === 'signal') {
-      // au vert : le joueur qui tourne à gauche doit céder à ceux d'en face
+      // au vert : le joueur qui tourne à gauche doit céder à ceux d'en face — et seulement s'il tourne à
+      // gauche : allant tout droit ou à droite, il ne coupe la route de personne en face
       const facing = -end.dx * -oEnd.dx + -end.dz * -oEnd.dz < -0.6;
       const link = o.link ?? o.next;
-      return facing && !!link && link.turn !== 'left';
+      return facing && !!link && link.turn !== 'left' && this.playerTurnsLeft(end);
     }
     if (oEnd.edge.roundabout && !end.edge.roundabout) return true;
     if (end.edge.roundabout && !oEnd.edge.roundabout) return false;
     const cross = -end.dx * -oEnd.dz - -end.dz * -oEnd.dx;
     return cross < -0.35;
+  }
+
+  /** Le joueur est-il en train de tourner à gauche dans ce carrefour (clignotant mis en l'abordant, ou cap déjà infléchi) ? */
+  private playerTurnsLeft(end: EdgeEnd): boolean {
+    if (this.entry && this.entry.end === end && this.entry.indL) return true;
+    if (this.indicatorWas(-1, 3.5)) return true;
+    const car = this.lastCar;
+    if (!car) return true;
+    // composante du cap vers la droite du sens d'arrivée : nettement négative quand on a tourné à gauche
+    const inX = -end.dx, inZ = -end.dz;
+    return car.forwardX * -inZ + car.forwardZ * inX < -0.3;
   }
 
   /** Le joueur est-il engagé dans le carrefour (en mouvement, ou l'avant nettement au-delà de l'embouchure) ? */

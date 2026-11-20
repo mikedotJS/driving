@@ -206,6 +206,13 @@ export class PlayerView {
     cam.updateMatrixWorld();
   }
 
+  /** Compile d'avance les programmes de rendu propres aux rétroviseurs (rendus dans une texture, sans la même sortie que l'écran). */
+  warmUpMirrors() {
+    const r = this.renderer, prev = r.getRenderTarget();
+    for (const mir of this.mirrors) { r.setRenderTarget(mir.rt); r.compile(this.scene, mir.cam); }
+    r.setRenderTarget(prev);
+  }
+
   /** Rend les rétroviseurs (à appeler avant le rendu principal). */
   renderMirrors() {
     if (!this.mirrorsEnabled || this.mode !== 'cockpit') return;

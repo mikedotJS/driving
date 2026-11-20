@@ -21,8 +21,10 @@ async function mesure(nom, { fenetre, qualite, largeur, hauteur, libre }) {
     const page = await (await browser.newContext({ viewport: { width: largeur, height: hauteur }, deviceScaleFactor: 1 })).newPage();
     const erreurs = [];
     page.on('pageerror', (e) => erreurs.push(e.message));
+    const t0 = Date.now();
     await page.goto(URL, { waitUntil: 'load' });
     await page.waitForFunction('window.__ready === true', { timeout: 180000 });
+    res.chargementS = +((Date.now() - t0) / 1000).toFixed(1);
     res.carte = await page.evaluate(() => {
       const gl = document.createElement('canvas').getContext('webgl2');
       if (!gl) return 'WebGL 2 indisponible';
@@ -43,10 +45,12 @@ async function mesure(nom, { fenetre, qualite, largeur, hauteur, libre }) {
     res.enConduite = await page.evaluate(() => { const g = window.__game; return { vitesseKmh: Math.round(g.player.car.speedKmh), vehicules: g.traffic.vehicles.length, pietons: g.traffic.pedestrians.length, appelsDessin: g.renderer.info.render.calls, triangles: g.renderer.info.render.triangles }; });
     await page.waitForFunction(() => [...document.querySelectorAll('h2')].some((h) => h.textContent.includes('Mesure de la fluidité')), null, { timeout: 120000 });
     res.rapportDuJeu = await page.evaluate(() => [...document.querySelectorAll('.menu p.note')].map((p) => p.textContent));
-    // durée des images pendant la conduite (les 4 premières secondes servent au chargement)
+    // durée des images pendant la conduite (les 4 premières secondes servent au démarrage de la leçon)
     const dt = await page.evaluate(() => window.__dt);
     let t = 0; const drive = [];
     for (const d of dt) { t += d; if (t > 4000 && t < 23000) drive.push(d); }
+    // plus long gel de l'affichage depuis le lancement de la leçon, démarrage compris
+    res.plusLongGelMs = +Math.max(...dt).toFixed(0);
     drive.sort((a, b) => a - b);
     const q = (p) => drive[Math.min(drive.length - 1, Math.floor(drive.length * p))];
     const mean = drive.reduce((a, b) => a + b, 0) / Math.max(1, drive.length);
@@ -63,6 +67,8 @@ async function mesure(nom, { fenetre, qualite, largeur, hauteur, libre }) {
 (async () => {
   const tout = [];
   // dans une fenêtre réelle (affichage composé par le système), puis sans fenêtre au cas où la machine n'a pas d'écran
+  // (le premier essai est aussi le tout premier lancement sur cette machine : caches de shaders vides)
+  tout.push(await mesure('fenetre-1080p-haute-premier-lancement', { fenetre: true, qualite: 'haute', largeur: 1920, hauteur: 1080 }));
   tout.push(await mesure('fenetre-1080p-haute', { fenetre: true, qualite: 'haute', largeur: 1920, hauteur: 1080 }));
   tout.push(await mesure('fenetre-1080p-moyenne', { fenetre: true, qualite: 'moyenne', largeur: 1920, hauteur: 1080 }));
   tout.push(await mesure('fenetre-1080p-haute-cadence-libre', { fenetre: true, qualite: 'haute', largeur: 1920, hauteur: 1080, libre: true }));

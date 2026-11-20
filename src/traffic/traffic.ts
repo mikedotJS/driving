@@ -252,21 +252,14 @@ export class Traffic {
     }
     for (const v of parent.keys()) this.clusterOf.set(v, find(v).id);
     // trajectoires qui se gênent à l'intérieur d'un même carrefour complexe : croisement, frôlement à moins
-    // d'une largeur de voiture, ou arrivée sur la même voie
+    // de 2,4 m d'axe en axe (deux carrosseries s'y toucheraient), ou arrivée sur la même voie
     const byCluster = new Map<number, LaneLink[]>();
     for (const l of this.net.links) {
       const c = this.clusterOf.get(l.vertex);
       if (c === undefined) continue;
       let a = byCluster.get(c); if (!a) byCluster.set(c, (a = [])); a.push(l);
     }
-    const near = (a: LaneLink, b: LaneLink): boolean => {
-      if (a.line.maxX < b.line.minX - 2 || b.line.maxX < a.line.minX - 2 || a.line.maxZ < b.line.minZ - 2 || b.line.maxZ < a.line.minZ - 2) return false;
-      for (let q = 1; q < b.line.length - 1; q += 1) {
-        const p = b.line.at(q), pr = a.line.project(p.x, p.z);
-        if (pr.s > 1 && pr.s < a.line.length - 1 && Math.hypot(p.x - pr.x, p.z - pr.z) < 2.0) return true;
-      }
-      return false;
-    };
+    const near = (a: LaneLink, b: LaneLink): boolean => this.near(a, b);
     for (const list of byCluster.values()) {
       for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
         const a = list[i], b = list[j];
@@ -658,7 +651,8 @@ export class Traffic {
       v.reversing = false;
       // dernier recours : blocage complet depuis une demi-minute, personne ne peut reculer — le véhicule
       // qui barre la route du joueur est retiré de la circulation, pour que la leçon ne reste pas figée
-      if (v.playerWait > 30 && faceOff) { v.alive = false; return; }
+      // (si le véhicule vient déjà de reculer sans que cela suffise, inutile d'attendre aussi longtemps)
+      if (v.playerWait > (v.backCooldown > 0 ? 8 : 30) && faceOff) { v.alive = false; return; }
       if (target !== 0 && Math.abs(v.dodge - target) < 0.04) { playerAhead = Infinity; v0 = Math.min(v0, 1.8); }
       if (playerAhead < gap) {
         // composante de la vitesse du joueur le long de notre trajectoire
@@ -1004,9 +998,28 @@ export class Traffic {
     return false;
   }
 
+  /** Deux trajectoires de carrefour passent-elles à moins de 2,4 m l'une de l'autre (hors de leurs extrémités) ? */
+  private nearCache = new Map<LaneLink, Map<LaneLink, boolean>>();
+  private near(a: LaneLink, b: LaneLink): boolean {
+    let m = this.nearCache.get(a);
+    if (!m) this.nearCache.set(a, (m = new Map()));
+    let r = m.get(b);
+    if (r !== undefined) return r;
+    r = false;
+    if (!(a.line.maxX < b.line.minX - 3 || b.line.maxX < a.line.minX - 3 || a.line.maxZ < b.line.minZ - 3 || b.line.maxZ < a.line.minZ - 3)) {
+      for (let q = 1; q < b.line.length - 1 && !r; q += 1) {
+        const p = b.line.at(q), pr = a.line.project(p.x, p.z);
+        if (pr.s > 1 && pr.s < a.line.length - 1 && Math.hypot(p.x - pr.x, p.z - pr.z) < 2.4) r = true;
+      }
+    }
+    m.set(b, r);
+    return r;
+  }
+
   /**
-   * Entonnoir : deux files de la même rue débouchent, à travers le carrefour, sur une seule voie. Si le
-   * joueur est dans la file d'à côté, à notre hauteur ou devant, on le laisse passer le premier.
+   * Entonnoir ou pincement : deux files de la même rue débouchent, à travers le carrefour, sur une seule
+   * voie, ou y suivent des trajectoires qui se frôlent. Si le joueur est dans la file d'à côté, à notre
+   * hauteur ou devant, on le laisse passer le premier.
    */
   private playerMerging(p: PlayerInfo, v: Vehicle, end: EdgeEnd, link: LaneLink): boolean {
     if (p.approach !== end || p.inJunction) return false;
@@ -1016,7 +1029,11 @@ export class Traffic {
       const d = Math.abs(l.line.project(p.x, p.z).d);
       if (d < bd) { bd = d; lane = l; }
     }
-    if (!lane || !lane.links.some((k) => k.to === link.to)) return false;
+    if (!lane) return false;
+    // trajectoires probables du joueur : celles que son clignotant annonce (tout droit sans clignotant)
+    const want = p.left ? 'left' : p.right ? 'right' : 'straight';
+    const his = lane.links.filter((k) => k.turn === want);
+    if (!(his.length ? his : lane.links).some((k) => k.to === link.to || this.near(k, link))) return false;
     const along = v.lane!.line.project(p.x, p.z).s - v.s; // centre du joueur par rapport à notre avant
     if (along > 25) return false;
     if (along < -3) {
@@ -1298,6 +1315,18 @@ export class Traffic {
     p.tx = x; p.tz = z;
   }
 
+  /** La voiture du joueur se trouve-t-elle à moins d'un pas devant ce piéton, sur son chemin ? */
+  private carAhead(p: Pedestrian, car: PlayerInfo): boolean {
+    const dx = p.tx - p.x, dz = p.tz - p.z, d = Math.hypot(dx, dz);
+    if (d < 0.5) return false;
+    const fx = Math.sin(car.heading), fz = -Math.cos(car.heading);
+    for (const step of [0.5, 1.0]) {
+      const x = p.x + (dx / d) * step - car.x, z = p.z + (dz / d) * step - car.z;
+      if (Math.abs(x * fx + z * fz) < car.length / 2 + 0.35 && Math.abs(x * -fz + z * fx) < car.width / 2 + 0.35) return true;
+    }
+    return false;
+  }
+
   private stepPedestrian(p: Pedestrian, dt: number, player: PlayerInfo | null) {
     if (p.hit) { p.speed = 0; return; }
     const c = p.crossing!;
@@ -1346,6 +1375,9 @@ export class Traffic {
         break;
       }
       case 'cross': {
+        // un piéton ne marche pas droit dans une voiture arrêtée ou qui roule au pas sur le passage : il
+        // marque le pas le temps qu'elle dégage (la voiture, elle, ne devrait pas s'y trouver)
+        if (player && Math.abs(player.speed) < 3 && this.carAhead(p, player)) { p.speed = 0; break; }
         walk(p.walkSpeed * 1.05);
         const half = c.edge.half + 1.0;
         const lat = (p.x - c.x) * nx + (p.z - c.z) * nz;

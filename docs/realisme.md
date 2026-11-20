@@ -128,34 +128,54 @@ passage, celui qui attend depuis le plus longtemps passe ; la circulation n'entr
 sans issue ; en dernier recours (30 s de blocage complet près du joueur, ou 75 s d'immobilisation à
 plus de 45 m de lui), le véhicule est retiré de la circulation.
 
-## 5. Charge de rendu
+## 5. Fluidité et charge de rendu
 
-Mesurée dans la version de production (`npm run build`), scène de boulevard avec circulation,
-réglage de qualité par défaut :
+### Mesure sur une carte graphique réelle
 
-| Mesure | Valeur |
-|---|---|
-| Simulation (physique à 1 kHz, circulation, règles) | 0,18 ms de processeur par image |
-| Appels de dessin par image | ≈ 170 |
-| Triangles par image | ≈ 1,3 million |
-| Textures / géométries en mémoire | 38 / 215 |
+La machine de développement n'a pas de carte graphique (rendu logiciel, 0,24 image par seconde : chiffre
+sans rapport avec un vrai GPU). La cadence a donc été mesurée sur une machine qui en a une, louée à la
+demande : un Mac Apple Silicon hébergé par GitHub (`.github/workflows/fluidite.yml`, script
+`tools/essais/fluidite.cjs`). Le script ouvre la version compilée du jeu dans Chromium, lance la mesure
+intégrée (*Réglages → Mesurer la fluidité* : le moniteur conduit une vingtaine de secondes sur un
+boulevard, rétroviseurs actifs) et relève le rapport du jeu ainsi que la durée de chaque image.
 
-Le nombre d'images par seconde sur une carte graphique n'a **pas** pu être mesuré : la machine de
-développement n'en a pas (rendu logiciel SwiftShader sur 4 cœurs, où le jeu tourne à 0,24 image par
-seconde — chiffre sans rapport avec un vrai GPU). 170 appels et 1,3 million de triangles sont une
-charge modeste pour une carte graphique dédiée récente.
+Machine : `Apple M1 (Virtual)`, 3 cœurs ; carte annoncée par WebGL : `ANGLE (Apple, ANGLE Metal Renderer:
+Apple Paravirtual device)` — un M1 **virtualisé**, à accélération matérielle Metal, nettement en deçà d'un
+M1 non virtualisé ou d'une carte graphique de jeu. Mesure du 20 novembre 2026 (exécution n° 1) :
 
-Pour ne pas dépendre de cette mesure, le jeu **se règle lui-même** : un régulateur mesure la cadence
-réelle et, si elle reste sous 40 images par seconde pendant 3 s, allège l'affichage d'un cran
-(résolution, distance de vue, puis rétroviseurs en dernier recours) ; il rétablit un cran après 25 s
-au-dessus de 57 images par seconde. Vérifié dans le navigateur : sur le rendu logiciel, il descend au
-dernier cran et la cadence mesurée passe de 0,24 à 0,67 image par seconde. Il se désactive dans
-*Réglages → Fluidité automatique* (ou avec `?perf=fixe` dans l'adresse).
+| Réglage | Cadence moyenne (minimum) | Durée médiane d'une image | 95 % des images sous |
+|---|---|---|---|
+| 1920 × 1080, qualité moyenne (réglage par défaut), synchronisation verticale | 47 images/s (39) | 16,9 ms | 34 ms |
+| 1920 × 1080, qualité haute, cadence libre (sans synchronisation) | 63 images/s (44) | 13,6 ms | 31 ms |
+| 2560 × 1440, qualité haute, cadence libre | 43 images/s (37) | 19,4 ms | 52 ms |
+| 1920 × 1080, qualité haute, synchronisation verticale, sans fenêtre | 35 images/s (31) | 33,3 ms | 33 ms |
+
+Charge relevée pendant ces essais : 400 à 510 appels de dessin et 1,6 à 2,3 millions de triangles par
+image (rétroviseurs compris), 6 à 17 véhicules et 14 à 24 piétons autour de la voiture.
+
+Lecture : sur ce GPU virtualisé modeste, la qualité moyenne en 1080p est fluide ; en qualité haute une
+image prend 13 à 14 ms, si bien qu'avec la synchronisation verticale la cadence oscille entre 60 et 30
+images par seconde — c'est la situation que le régulateur automatique (ci-dessous) corrige en allégeant
+l'affichage d'un cran. **Ce que cette mesure ne dit pas** : la cadence sur *votre* machine, que seule la
+mesure intégrée au jeu peut donner.
+
+Le tout premier lancement sur cette machine a aussi montré un **gel de 6,8 s** au début de la leçon : les
+programmes de rendu (shaders) se compilaient à la première image où chaque matériau apparaissait. Ils
+sont désormais compilés pendant l'écran de chargement, rétroviseurs compris (`Game.warmUp`).
+
+### Le jeu se règle lui-même
+
+Un régulateur mesure la cadence réelle et, si elle reste sous 40 images par seconde pendant 3 s, allège
+l'affichage d'un cran (résolution, distance de vue, puis rétroviseurs en dernier recours) ; il rétablit
+un cran après 25 s au-dessus de 57 images par seconde. Vérifié dans le navigateur : sur le rendu
+logiciel, il descend au dernier cran et la cadence mesurée passe de 0,24 à 0,67 image par seconde. Il se
+désactive dans *Réglages → Fluidité automatique* (ou avec `?perf=fixe` dans l'adresse).
 
 Pour connaître la cadence sur votre machine : *Réglages → Mesurer la fluidité*. Le moniteur conduit
 20 secondes sur un boulevard, puis le jeu affiche la cadence moyenne et minimale, le nom de la carte
-graphique utilisée par le navigateur et un conseil de réglage (rapport copiable). Essayée ici de bout en
-bout, la mesure identifie bien le rendu logiciel et le signale.
+graphique utilisée par le navigateur et un conseil de réglage (rapport copiable).
+
+La simulation elle-même (physique à 1 kHz, circulation, règles) coûte 0,18 ms de processeur par image.
 
 ## 6. Captures
 

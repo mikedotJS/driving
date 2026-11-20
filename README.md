@@ -28,7 +28,9 @@ Pour une version optimisée : `npm run build` puis `npm run preview`.
 5. **Retour de force** (facultatif) : *Connecter le volant…* ouvre la fenêtre WebHID du navigateur.
    Cliquez sur *Tester* : le jeu vous demande de quel côté le volant est parti et règle le sens tout seul.
 6. **Fluidité** : *Réglages → Mesurer la fluidité* fait conduire le moniteur 20 secondes et affiche la
-   cadence d'images de votre machine, le nom de la carte graphique et un conseil de réglage.
+   cadence d'images de votre machine, le nom de la carte graphique et un conseil de réglage. Pour
+   repère : sur un Mac M1 virtualisé (GPU modeste), la même mesure donne 47 images/s en 1080p qualité
+   moyenne et 63 en qualité haute sans synchronisation verticale — détail dans `docs/realisme.md`.
 
 > Le retour de force **n'a pas pu être essayé sur un volant réel** depuis l'environnement de
 > développement. Il est vérifié avec un G923 émulé : les trames envoyées sont celles des pilotes Linux,
@@ -104,7 +106,7 @@ les fausses fautes signalées à un élève qui conduit bien. Le balayage plus l
 utilisées pendant la mise au point (`BASE=1300 npm run test:endurance` pour en rejouer une). Dans les
 grandes places comme la Croix de Chavaux, chaque véhicule réserve son trajet avant d'entrer : les
 carrosseries ne se chevauchent pratiquement plus (un instant relevé sur 18 essais de 6 minutes). Les mesures (physique comparée à une
-citadine réelle, volant émulé, charge de rendu, captures) sont dans [`docs/realisme.md`](docs/realisme.md).
+citadine réelle, volant émulé, fluidité mesurée sur une carte graphique réelle, captures) sont dans [`docs/realisme.md`](docs/realisme.md).
 
 ## Le décor
 

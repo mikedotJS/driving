@@ -306,9 +306,11 @@ export class Autopilot {
               let stop = this.yellow.get(sp);
               // aura-t-on franchi la ligne avant le rouge, à l'allure actuelle ?
               const willPass = d / Math.max(v, 0.5) < sp.controller.timeToChange(sp.group ?? 0, time) - 0.3;
-              if (stop === undefined) stop = d > v * 1.0 + (v * v) / (2 * 3.2) + 1 || !willPass;
+              // (à l'arrêt ou presque devant la ligne — on attendait que le carrefour se dégage — on ne
+              // redémarre pas à l'orange : on resterait engagé au rouge)
+              if (stop === undefined) stop = v < 1 ? d > -0.3 : d > v * 1.0 + (v * v) / (2 * 3.2) + 1 || !willPass;
               // ralenti en route (file, carrefour) : on n'y arrivera plus, on s'arrête tant que c'est possible
-              else if (!stop && !willPass && d > v * 0.5 + (v * v) / (2 * 5) + 0.3) stop = true;
+              else if (!stop && !willPass && (v < 1 ? d > -0.3 : d > v * 0.5 + (v * v) / (2 * 5) + 0.3)) stop = true;
               this.yellow.set(sp, stop);
               if (stop && d > -0.6) stopAt(d - 0.4, 'feu orange');
             }
@@ -352,7 +354,7 @@ export class Autopilot {
             if (!green && dLine > -1) vt = Math.min(vt, Math.sqrt(3.3 * 3.3 + 2 * 1.3 * Math.max(0, dLine - 2)));
             // ligne déjà franchie (ligne reculée) : on peut encore s'arrêter à l'embouchure du carrefour
             const dHold = dLine > -1.2 ? dLine - 0.5 : dEnd - 0.8;
-            if (dHold > -1.0 && this.mustYield(lane, link, Math.max(0, dHold), v)) stopAt(Math.max(0, dHold), 'priorité');
+            if (dHold > -1.0 && this.mustYield(lane, link, Math.max(0, dHold), v, false, dLine <= -1.2)) stopAt(Math.max(0, dHold), 'priorité');
             // R415-2 : on ne s'engage pas si l'on risque de rester immobilisé dans le carrefour
             else if (dHold > -1.0 && this.gapSlow && this.waitTime < 45) {
               // la traversée comprend les voies très courtes qui relient les sommets d'un grand carrefour
@@ -494,11 +496,26 @@ export class Autopilot {
   }
 
   /** Faut-il céder le passage avant d'emprunter la liaison ? */
-  private mustYield(lane: Lane, link: LaneLink, dLine: number, v: number, inside = false): boolean {
+  /**
+   * Ce véhicule, à `od` mètres du carrefour, va-t-il s'arrêter à son feu ? Au rouge, oui s'il en a encore
+   * la distance ; à l'orange, seulement s'il peut le faire sans freinage brutal — sinon il passe, et il
+   * faut compter avec lui.
+   */
+  private stopsAtLight(oEnd: EdgeEnd, od: number, ov: number): boolean {
+    if (oEnd.control !== 'signal' || !oEnd.controller || !this.traffic) return false;
+    const st = oEnd.controller.state(oEnd.group, this.traffic.time);
+    if (st === 'green') return false;
+    return st === 'yellow' ? od > (ov * ov) / (2 * 3.2) + 1 : od > (ov * ov) / 16;
+  }
+
+  private mustYield(lane: Lane, link: LaneLink, dLine: number, v: number, inside = false, past = false): boolean {
     const tr = this.traffic;
     if (!tr) return false;
     const end = lane.endRef;
-    if (end.control === 'signal' && end.controller && end.controller.state(end.group, tr.time) !== 'green') return false;
+    // feu qui n'est plus au vert : l'arrêt à la ligne est géré ailleurs. Mais si la ligne est déjà franchie
+    // (on attendait, avancé dans le carrefour, de pouvoir tourner à gauche), on ne dégage qu'une fois sûr
+    // que plus personne n'arrive en face : la suite s'applique donc aussi.
+    if (end.control === 'signal' && end.controller && end.controller.state(end.group, tr.time) !== 'green' && !inside && !past) return false;
     const inX = -end.dx, inZ = -end.dz;
     const myEta = Math.max(0, dLine) / Math.max(1.5, v);
     if (myEta > 6) return false;
@@ -541,7 +558,7 @@ export class Autopilot {
       // il doit vraiment être dans l'axe de cette branche (et non dans une rue parallèle)
       const lat = Math.abs((o.x - V.x) * -oEnd.dz + (o.z - V.z) * oEnd.dx);
       if (lat > oEnd.edge.half + 2) continue;
-      if (oEnd.control === 'signal' && oEnd.controller && oEnd.controller.state(oEnd.group, tr.time) !== 'green') continue;
+      if (this.stopsAtLight(oEnd, dist - 6, o.v)) continue;
       if (tr.hasPriorityOver(oEnd, null, end, link, inX, inZ)) return true;
     }
     // dans une grande place, un véhicule engagé a réservé tout son trajet : s'il doit couper le nôtre et
@@ -573,9 +590,9 @@ export class Autopilot {
         const via = o.link.to;
         if (via.to === link.vertex && via !== lane && via.line.length < 40 && via.links.some((l) => this.inConflict(link, l))) {
           const oEnd = via.endRef;
-          if (oEnd.control === 'signal' && oEnd.controller && oEnd.controller.state(oEnd.group, tr.time) !== 'green') continue;
-          if (!tr.hasPriorityOver(oEnd, null, end, link, inX, inZ)) continue;
           const od = o.link.line.length - o.s + via.line.length;
+          if (this.stopsAtLight(oEnd, od, o.v)) continue;
+          if (!tr.hasPriorityOver(oEnd, null, end, link, inX, inZ)) continue;
           if (od / Math.max(2, o.v) < need && !(this.waitTime > 20 && o.v < 0.2)) return true;
         }
         continue;
@@ -583,9 +600,9 @@ export class Autopilot {
       if (!o.lane || !o.next || o.lane.to !== link.vertex || o.lane === lane) continue;
       if (!this.inConflict(link, o.next)) continue;
       const oEnd = o.lane.endRef;
-      if (oEnd.control === 'signal' && oEnd.controller && oEnd.controller.state(oEnd.group, tr.time) !== 'green') continue;
-      if (!tr.hasPriorityOver(oEnd, o.next, end, link, inX, inZ)) continue;
       const od = o.lane.line.length - o.s;
+      if (this.stopsAtLight(oEnd, od, o.v)) continue;
+      if (!tr.hasPriorityOver(oEnd, o.next, end, link, inX, inZ)) continue;
       const eta = od / Math.max(2, o.v);
       if (od < 10 || eta < need) {
         if (this.waitTime > 20 && o.v < 0.2) continue;
@@ -608,7 +625,8 @@ export class Autopilot {
       r = false;
       for (let q = 1; q < b.line.length - 1 && !r; q += 1) {
         const p = b.line.at(q), pr = a.line.project(p.x, p.z);
-        if (pr.s > 1 && pr.s < a.line.length - 1 && Math.hypot(p.x - pr.x, p.z - pr.z) < 2.1) r = true;
+        // (deux voitures ne se croisent pas à moins de 2,4 m d'axe en axe sans se frôler)
+        if (pr.s > 1 && pr.s < a.line.length - 1 && Math.hypot(p.x - pr.x, p.z - pr.z) < 2.4) r = true;
       }
       m.set(b, r);
     }
@@ -697,9 +715,12 @@ export class Autopilot {
     for (const o of tr.vehicles) {
       const fx = Math.sin(o.heading), fz = -Math.cos(o.heading), r = o.width / 2 + 0.1;
       speed = o.v;
+      // auprès d'un véhicule arrêté, ou qui vient en face, on garde un demi-mètre de marge et non quinze
+      // centimètres : on ne repart pas en frôlant l'angle d'une carrosserie
+      const still = o.v < 0.5, facing = fx * car.forwardX + fz * car.forwardZ < -0.5;
+      slack = still || facing ? 1.3 : 1.05;
       for (const k of [-0.32, 0, 0.32]) test(o.x + fx * o.length * k, o.z + fz * o.length * k, r);
-      // véhicule à l'arrêt : on couvre aussi ses coins — on ne repart pas en frôlant l'angle d'une carrosserie
-      if (o.v < 0.5) for (const k of [-0.44, 0.44]) test(o.x + fx * o.length * k, o.z + fz * o.length * k, r - 0.1);
+      if (still) for (const k of [-0.44, 0.44]) test(o.x + fx * o.length * k, o.z + fz * o.length * k, r - 0.1);
     }
     slack = 1.05; speed = 0;
     // cyclistes : on ne dépasse que si l'on peut laisser un mètre, sinon on reste derrière (R414-4)

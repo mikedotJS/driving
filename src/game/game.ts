@@ -159,6 +159,9 @@ export class Game implements MenuHost {
     }
     addEventListener('resize', () => this.resize());
     document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'drive') this.pause(); });
+    progress(0.97, 'Préparation de l’affichage…');
+    await tick();
+    await this.warmUp();
     progress(1, 'Prêt');
     this.state = 'menu';
     this.menus.main();
@@ -472,6 +475,19 @@ export class Game implements MenuHost {
       }
     }
     return { rows, total: Math.round(total * 2) / 2, eliminated };
+  }
+
+  /**
+   * Compile les programmes de rendu pendant le chargement — vue principale, habitacle, rétroviseurs. Sans
+   * cela, ils se compilent à la première image où chaque matériau apparaît : mesuré sur une vraie carte
+   * graphique, le tout premier lancement d'une leçon se figeait plusieurs secondes.
+   */
+  private async warmUp() {
+    try {
+      const done = this.renderer.compileAsync(this.scene, this.view.camera).then(() => this.view.warmUpMirrors());
+      // jamais plus de vingt secondes : au pire, les programmes restants se compileront à l'affichage
+      await Promise.race([done, new Promise((r) => setTimeout(r, 20000))]);
+    } catch { /* sans gravité */ }
   }
 
   // ───────────────────────── mesure de fluidité ─────────────────────────
