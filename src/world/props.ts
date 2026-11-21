@@ -12,6 +12,7 @@ import { GeoBuilder } from './geo';
 import { SIGNS, drawSign } from './signs';
 import { type Enseignes, CLE_TREMIE, auSol, cleAbri, cleBus, cleMetro, panneau, poseBandeau } from './enseignes';
 import { hash32, Rng } from '../core/math';
+import { BLOC_ARBRES, blocEnVue, estMobilier, formeArbre, orienter, poserMobilier, poserTronc, silhouette, type Mobilier, type Pose } from './sol';
 
 interface SignPlacement { code: string; text?: string; x: number; z: number; /** direction vers laquelle le panneau fait face */ fx: number; fz: number; y: number; plate?: boolean }
 
@@ -80,8 +81,11 @@ export class Props {
   private signsByChunk = new Map<string, SignPlacement[]>();
   private transportsByChunk = new Map<string, Transport[]>();
   private treesByChunk = new Map<string, number[][]>();
+  /** houppiers par bloc de dalles : maillage et centre du bloc (null : bloc sans arbre) */
+  private blocs = new Map<string, { mesh: THREE.InstancedMesh; x: number; z: number } | null>();
   private lampsByChunk = new Map<string, InstanceList>();
   private bollardsByChunk = new Map<string, InstanceList>();
+  private mobilierByChunk = new Map<string, { k: Mobilier; x: number; z: number; o: Pose; cap?: number }[]>();
   private lamps: Lamp[] = [];
   private lampMesh!: THREE.InstancedMesh;
   private lastState = new Map<string, string>();
@@ -110,6 +114,7 @@ export class Props {
     this.placeTrees();
     this.placeLamps();
     this.placeBollards();
+    this.placeMobilier();
   }
 
   private key(x: number, z: number) { return `${Math.floor(x / this.chunk)},${Math.floor(z / this.chunk)}`; }
@@ -493,14 +498,91 @@ export class Props {
   // ───────────────────────── arbres, lampadaires, potelets ─────────────────────────
   private placeTrees() {
     for (const t of this.net.map.trees) {
-      const [x, z, h, circ] = t;
+      const [x, z, h, circ, genre] = t;
       if (this.ground.isRoad(x, z)) continue;
       const seed = hash32(`${x}|${z}`);
       const r = (seed % 1000) / 1000;
-      const height = h > 3 ? Math.min(22, h) : 7.5 + r * 6;
+      // hauteur et tronc relevés quand la carte les donne, sinon ceux du genre ; la silhouette suit le genre
+      const f = silhouette(genre ?? '');
+      const height = h > 3 ? Math.min(24, h) : f.haut[0] + r * (f.haut[1] - f.haut[0]);
       const radius = circ > 20 ? Math.min(0.45, circ / 100 / (2 * Math.PI)) : 0.14 + r * 0.1;
-      this.push(this.treesByChunk, x, z, [x, z, height, radius, r]);
+      this.push(this.treesByChunk, x, z, [x, z, height, radius, r, f.large, f.elance, ...f.teinte]);
       this.posts.push({ x, z, r: radius + 0.05 });
+    }
+  }
+
+  /**
+   * Houppiers du bloc de BLOC_ARBRES × BLOC_ARBRES dalles qui contient la dalle `key` : un seul maillage
+   * instancié par bloc, construit quand sa première dalle l'est. Depuis que la photo aérienne plante des
+   * arbres dans presque toutes les dalles, un maillage par dalle coûtait un appel de dessin (et ses
+   * passes d'ombre) par dalle en vue. Le bloc est affiché ou caché par voirArbres.
+   */
+  private houppiers(key: string) {
+    const [ci, cj] = key.split(',').map(Number);
+    const bi = Math.floor(ci / BLOC_ARBRES), bj = Math.floor(cj / BLOC_ARBRES), cle = `${bi},${bj}`;
+    if (this.blocs.has(cle)) return;
+    const arbres: number[][] = [];
+    for (let i = 0; i < BLOC_ARBRES; i++) for (let j = 0; j < BLOC_ARBRES; j++) arbres.push(...(this.treesByChunk.get(`${bi * BLOC_ARBRES + i},${bj * BLOC_ARBRES + j}`) ?? []));
+    const C = this.chunk * BLOC_ARBRES;
+    if (!arbres.length) { this.blocs.set(cle, null); return; }
+    const crowns = new THREE.InstancedMesh(this.crownGeo, this.crownMat, arbres.length);
+    crowns.name = 'houppiers ' + cle;
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), axe = new THREE.Vector3(0, 1, 0);
+    const col = new THREE.Color();
+    arbres.forEach((t, i) => {
+      const [x, z, h, , rnd, large, elance, teinte, satur, clarte] = t;
+      const f = formeArbre(h, rnd, large, elance);
+      q.setFromAxisAngle(axe, rnd * 6.28);
+      m.compose(p.set(x, KERB_H + f.tronc + f.demiHaut * 0.52, z), q, s.set(f.rayon, f.demiHaut, f.rayon));
+      crowns.setMatrixAt(i, m);
+      col.setHSL(teinte - 0.03 + rnd * 0.07, satur, clarte + ((rnd * 7) % 1) * 0.22);
+      crowns.setColorAt(i, col);
+    });
+    crowns.castShadow = true; crowns.receiveShadow = true;
+    crowns.customDepthMaterial = this.crownDepth;
+    crowns.matrixAutoUpdate = false;
+    crowns.computeBoundingSphere();
+    this.group.add(crowns);
+    this.blocs.set(cle, { mesh: crowns, x: (bi + 0.5) * C, z: (bj + 0.5) * C });
+  }
+
+  /** Affiche les houppiers des blocs à portée de vue (même règle que les dalles de la ville), cache les autres. */
+  voirArbres(x: number, z: number, rayon: number) {
+    const C = this.chunk;
+    for (const b of this.blocs.values()) {
+      if (!b) continue;
+      b.mesh.visible = blocEnVue(b.x - x, b.z - z, rayon, C);
+    }
+  }
+
+  // ───────────────────────── petit mobilier cartographié ─────────────────────────
+  /**
+   * Bancs, corbeilles, arceaux vélo, bornes… aux points relevés dans OpenStreetMap (la carte les a
+   * déjà écartés de la chaussée et des bâtiments). Orientés d'après la rue la plus proche ; chacun
+   * laisse des cercles d'obstacle pour les collisions. Les potelets rejoignent le lot instancié.
+   */
+  private placeMobilier() {
+    const brouillon = new GeoBuilder(true);
+    const m = new THREE.Matrix4();
+    for (const p of this.net.map.pois) {
+      if (this.ground.isRoad(p.x, p.z)) continue;
+      if (p.k === 'bollard') {
+        const k = this.key(p.x, p.z);
+        let a = this.bollardsByChunk.get(k);
+        if (!a) this.bollardsByChunk.set(k, (a = { m: [] }));
+        m.makeTranslation(p.x, KERB_H, p.z);
+        a.m.push(...m.elements);
+        this.posts.push({ x: p.x, z: p.z, r: 0.07 });
+        continue;
+      }
+      if (!estMobilier(p.k)) continue;
+      const loc = this.net.locate(p.x, p.z);
+      let rue = null;
+      if (loc && loc.dist < 40) { const pt = loc.edge.line.at(loc.s); rue = { x: pt.x, z: pt.z, tx: pt.tx, tz: pt.tz }; }
+      const o = orienter(p.x, p.z, rue, p.d);
+      this.push(this.mobilierByChunk, p.x, p.z, { k: p.k, x: p.x, z: p.z, o, cap: p.c });
+      // les obstacles sont ceux de la forme dessinée (elle le sera pour de bon avec sa dalle)
+      for (const c of poserMobilier(brouillon, p.k, p.x, p.z, KERB_H, o, p.c)) this.posts.push(c);
     }
   }
 
@@ -568,9 +650,12 @@ export class Props {
   /**
    * Ajoute au groupe de la dalle son mobilier. `textes` est le lot d'enseignes de la dalle (voir
    * City.decorators) : les noms d'arrêts et de stations s'y ajoutent sans appel de dessin de plus.
+   * `uni` est le lot à couleurs par sommet de la dalle : le petit mobilier s'y ajoute de même.
    */
-  populateChunk(key: string, group: THREE.Group, textes?: GeoBuilder) {
+  populateChunk(key: string, group: THREE.Group, textes?: GeoBuilder, uni?: GeoBuilder) {
     const add = (g: GeoBuilder, mat: THREE.Material) => { if (g.empty) return; const mesh = new THREE.Mesh(g.build(), mat); mesh.castShadow = true; mesh.receiveShadow = true; mesh.matrixAutoUpdate = false; group.add(mesh); };
+    const mobilier = this.mobilierByChunk.get(key);
+    if (mobilier && uni) for (const o of mobilier) poserMobilier(uni, o.k, o.x, o.z, KERB_H, o.o, o.cap);
     // poteaux des panneaux, et avec eux abris de bus et garde-corps du métro : un seul lot de métal gris
     const pole = new GeoBuilder();
     const transports = this.transportsByChunk.get(key);
@@ -613,31 +698,22 @@ export class Props {
       add(face, this.signMat); add(plate, this.plateMat); add(back, this.mats.metalGrey);
     }
     add(pole, this.mats.metalGrey);
-    // arbres
+    // arbres : les troncs de la dalle, et les houppiers de son bloc s'ils ne sont pas encore construits
     const trees = this.treesByChunk.get(key);
     if (trees) {
-      const trunks = new THREE.InstancedMesh(this.trunkGeo, this.trunkMat, trees.length);
-      const crowns = new THREE.InstancedMesh(this.crownGeo, this.crownMat, trees.length);
+      // sans lot uni (pages de mise au point), les troncs gardent leur propre maillage instancié
+      const trunks = uni ? null : new THREE.InstancedMesh(this.trunkGeo, this.trunkMat, trees.length);
       const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
-      const col = new THREE.Color();
       trees.forEach((t, i) => {
-        const [x, z, h, r, rnd] = t;
-        const trunkH = h * 0.42;
-        m.compose(p.set(x, KERB_H, z), q.identity(), s.set(r, trunkH, r));
-        trunks.setMatrixAt(i, m);
-        const cr = h * (0.3 + rnd * 0.08);
-        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd * 6.28);
-        m.compose(p.set(x, KERB_H + trunkH + cr * 0.55, z), q, s.set(cr, cr * 1.05, cr));
-        crowns.setMatrixAt(i, m);
-        col.setHSL(0.24 + rnd * 0.07, 0.3, 0.5 + ((rnd * 7) % 1) * 0.22);
-        crowns.setColorAt(i, col);
+        const f = formeArbre(t[2], t[4], t[5], t[6]);
+        // tronc : versé dans le lot uni de la dalle, sans appel de dessin de plus (il ne porte pas d'ombre :
+        // celle du houppier la recouvre)
+        if (uni) poserTronc(uni, t[0], t[1], KERB_H, f.tronc, t[3]);
+        else { m.compose(p.set(t[0], KERB_H, t[1]), q.identity(), s.set(t[3], f.tronc, t[3])); trunks!.setMatrixAt(i, m); }
       });
-      trunks.castShadow = true; trunks.receiveShadow = true;
-      crowns.castShadow = true; crowns.receiveShadow = true;
-      crowns.customDepthMaterial = this.crownDepth;
-      trunks.computeBoundingSphere(); crowns.computeBoundingSphere();
-      group.add(trunks, crowns);
+      if (trunks) { trunks.castShadow = true; trunks.receiveShadow = true; trunks.computeBoundingSphere(); group.add(trunks); }
     }
+    this.houppiers(key);
     // lampadaires
     const lamps = this.lampsByChunk.get(key);
     if (lamps) {

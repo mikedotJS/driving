@@ -8,11 +8,12 @@
 // Hauteurs, étages, matériaux et dates des bâtiments : IGN – BD TOPO (Licence Ouverte Etalab 2.0),
 // reportés sur les emprises OSM quand data/ign-raw existe (tools/fetch-ign.sh).
 
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { loadOsm } from './lib/osm-load.mjs';
 import { loadIgn, apparier } from './lib/ign.mjs';
 import { rattacher, stationsDeMetro } from './lib/enseignes.mjs';
 import * as G from './lib/geom.mjs';
+import * as SOL from './lib/sol.mjs';
 import { createRequire } from 'node:module';
 const ClipperLib = createRequire(import.meta.url)('clipper-lib');
 
@@ -78,31 +79,19 @@ function wayRing(w) {
   return pts;
 }
 
-/** Assemble les chemins "outer" d'une relation multipolygone en anneaux. */
-function relationRings(rel) {
+/** Assemble les chemins d'un rôle (« outer » par défaut) d'une relation multipolygone en anneaux. */
+function relationRings(rel, inner = false) {
   const segs = [];
   for (const m of rel.members) {
-    if (m.type !== 'way' || (m.role !== 'outer' && m.role !== '')) continue;
+    if (m.type !== 'way' || (inner ? m.role !== 'inner' : m.role !== 'outer' && m.role !== '')) continue;
     const w = ways.get(m.ref);
     if (!w) continue;
-    segs.push(w.nds.slice());
+    segs.push(w.nds);
   }
   const rings = [];
-  while (segs.length) {
-    let cur = segs.pop();
-    let guard = 0;
-    while (cur[0] !== cur[cur.length - 1] && guard++ < 1000) {
-      const tail = cur[cur.length - 1];
-      const k = segs.findIndex((s) => s[0] === tail || s[s.length - 1] === tail);
-      if (k < 0) break;
-      const s = segs.splice(k, 1)[0];
-      if (s[0] !== tail) s.reverse();
-      cur = cur.concat(s.slice(1));
-    }
-    if (cur[0] === cur[cur.length - 1] && cur.length >= 4) {
-      const pts = cur.slice(0, -1).map((id) => nodeXZ.get(id)).filter(Boolean);
-      if (pts.length >= 3) rings.push(pts);
-    }
+  for (const ids of SOL.assembler(segs)) {
+    const pts = ids.map((id) => nodeXZ.get(id)).filter(Boolean);
+    if (pts.length >= 3) rings.push(pts);
   }
   return rings;
 }
@@ -184,7 +173,10 @@ for (const w of ways.values()) {
   if (!pts.some(inRect)) continue;
   pts = G.simplifyDP(pts, 0.15);
   const kind = b === 'retaining_wall' ? 'wall' : b === 'guard_rail' ? 'rail' : b;
-  barriers.push({ kind, pts, h: parseFloat(w.tags.height) || (kind === 'wall' ? 2.2 : kind === 'hedge' ? 1.5 : kind === 'rail' ? 0.8 : 1.7) });
+  // une haie cartographiée comme une surface est un massif planté : son contour reste un obstacle,
+  // mais il n'est plus dressé en mur (voir les espaces « massif »)
+  const massif = b === 'hedge' && w.tags.area === 'yes' && w.nds.length >= 4 && w.nds[0] === w.nds[w.nds.length - 1];
+  barriers.push({ kind: massif ? 'massif' : kind, pts, h: massif ? 0.5 : parseFloat(w.tags.height) || (kind === 'wall' ? 2.2 : kind === 'hedge' ? 1.5 : kind === 'rail' ? 0.8 : 1.7) });
   for (let i = 1; i < pts.length; i++) obstacleGrid.add(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], 2);
 }
 log(`murs/clôtures : ${barriers.length}`);
@@ -853,7 +845,7 @@ function exToPolys(ex, ox, oz) {
 
 // Bande de trottoir : jusqu'à 6 m du bord de chaussée (plus les voies piétonnes) ; au-delà, cœur d'îlot.
 const SIDEWALK_BAND = 6;
-let band;
+let band, bandePietonne = [];
 {
   let ped = [];
   for (const w of ways.values()) {
@@ -864,13 +856,15 @@ let band;
     if (pts.length < 2 || !pts.some(inRect)) continue;
     ped = ped.concat(bufferLine(G.simplifyDP(pts, 0.2), 5));
   }
+  bandePietonne = ped;
   band = boolOp(UNION, inflate(road, SIDEWALK_BAND).concat(ped), null);
   band = C.Clipper.CleanPolygons(band, 3);
   log(`bande de trottoir : ${band.length} anneaux, ${nVerts(band)} sommets`);
 }
 
 const chunks = {};
-let nRoadV = 0, nWalkV = 0, nInnerV = 0;
+const roadCells = new Map(); // dalle → chaussée (chemins Clipper), pour les soustractions locales
+let nRoadV = 0, nWalkV = 0;
 const countV = (polys) => polys.reduce((s, p) => s + p.o.length / 2 + p.h.reduce((t, h) => t + h.length / 2, 0), 0);
 for (let ci = ci0; ci <= ci1; ci++) {
   const colRect = rectPath(ci * CHUNK, RECT.z0 - 500, (ci + 1) * CHUNK, RECT.z1 + 500);
@@ -883,104 +877,406 @@ for (let ci = ci0; ci <= ci1; ci++) {
     const cellBand = boolOp(INTER, bandCol, rect);
     const roadPolys = exToPolys(boolEx(UNION, cellRoad, null), x0, z0);
     const walkPolys = exToPolys(boolEx(DIFF, cellBand, cellRoad), x0, z0);
-    const innerPolys = exToPolys(boolEx(DIFF, rect, cellBand), x0, z0);
-    nRoadV += countV(roadPolys); nWalkV += countV(walkPolys); nInnerV += countV(innerPolys);
-    const ck = { r: roadPolys, w: walkPolys };
-    if (innerPolys.length) ck.g = innerPolys;
-    chunks[`${ci},${cj}`] = ck;
+    nRoadV += countV(roadPolys); nWalkV += countV(walkPolys);
+    if (cellRoad.length) roadCells.set(`${ci},${cj}`, cellRoad);
+    chunks[`${ci},${cj}`] = { r: roadPolys, w: walkPolys };
   }
 }
-log(`dalles : ${Object.keys(chunks).length} (${nRoadV} sommets chaussée, ${nWalkV} trottoir, ${nInnerV} cœurs d'îlot)`);
+log(`dalles : ${Object.keys(chunks).length} (${nRoadV} sommets chaussée, ${nWalkV} trottoir)`);
 
-// ───────────────────────── Espaces, points d'intérêt ─────────────────────────
-function areaKind(t) {
-  if (t.building) return null;
-  if (t.leisure && /^(park|garden|playground|dog_park)$/.test(t.leisure)) return 'park';
-  if (t.landuse && /^(grass|village_green|greenery|flowerbed|recreation_ground|meadow|allotments)$/.test(t.landuse)) return 'grass';
-  if (t.natural && /^(scrub|grassland|heath)$/.test(t.natural)) return 'grass';
-  if (t.landuse === 'forest' || t.natural === 'wood') return 'wood';
-  if (t.leisure === 'pitch' || t.leisure === 'track') return 'pitch';
-  if (t.natural === 'water' || t.leisure === 'swimming_pool') return 'water';
-  if (t.landuse === 'cemetery') return 'cemetery';
-  if (t.amenity === 'parking' && t.parking !== 'underground' && t.parking !== 'multi-storey') return 'parking';
-  if ((t.highway === 'pedestrian' && t.area === 'yes') || t.place === 'square') return 'plaza';
-  if (t.landuse === 'construction' || t.landuse === 'brownfield') return 'dirt';
-  return null;
+// ───────────────────────── Requêtes ponctuelles : chaussée, bâti ─────────────────────────
+/** Le point est-il sur la chaussée (polygones `r` des dalles) ? */
+function onRoad(x, z) {
+  const ck = chunks[`${Math.floor(x / CHUNK)},${Math.floor(z / CHUNK)}`];
+  if (!ck) return false;
+  const lx = (x - Math.floor(x / CHUNK) * CHUNK) * SCALE, lz = (z - Math.floor(z / CHUNK) * CHUNK) * SCALE;
+  const inside = (ring) => {
+    let c = false;
+    for (let i = 0, n = ring.length / 2, j = n - 1; i < n; j = i++) {
+      const xi = ring[i * 2], zi = ring[i * 2 + 1], xj = ring[j * 2], zj = ring[j * 2 + 1];
+      if ((zi > lz) !== (zj > lz) && lx < ((xj - xi) * (lz - zi)) / (zj - zi) + xi) c = !c;
+    }
+    return c;
+  };
+  for (const poly of ck.r) if (inside(poly.o) && !poly.h.some(inside)) return true;
+  return false;
 }
+/** Bord de chaussée le plus proche de (x, z), à moins de `max` m : { x, z, d } ou null. */
+const bordGrid = new Map();
+{
+  const cell = 10;
+  for (const ring of road) {
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length];
+      const seg = [a.X / SCALE, a.Y / SCALE, b.X / SCALE, b.Y / SCALE];
+      const i0 = Math.floor(Math.min(seg[0], seg[2]) / cell), i1 = Math.floor(Math.max(seg[0], seg[2]) / cell);
+      const j0 = Math.floor(Math.min(seg[1], seg[3]) / cell), j1 = Math.floor(Math.max(seg[1], seg[3]) / cell);
+      for (let ii = i0; ii <= i1; ii++) for (let jj = j0; jj <= j1; jj++) {
+        const k = `${ii},${jj}`;
+        let l = bordGrid.get(k); if (!l) bordGrid.set(k, (l = [])); l.push(seg);
+      }
+    }
+  }
+}
+function bordProche(x, z, max = 2.5) {
+  const cell = 10;
+  let best = null;
+  for (let ii = Math.floor((x - max) / cell); ii <= Math.floor((x + max) / cell); ii++) for (let jj = Math.floor((z - max) / cell); jj <= Math.floor((z + max) / cell); jj++) {
+    const l = bordGrid.get(`${ii},${jj}`);
+    if (!l) continue;
+    for (const s of l) {
+      const dx = s[2] - s[0], dz = s[3] - s[1], l2 = dx * dx + dz * dz;
+      const t = l2 > 0 ? Math.max(0, Math.min(1, ((x - s[0]) * dx + (z - s[1]) * dz) / l2)) : 0;
+      const px = s[0] + dx * t, pz = s[1] + dz * t, d = Math.hypot(x - px, z - pz);
+      if (d <= max && (!best || d < best.d)) best = { x: px, z: pz, d };
+    }
+  }
+  return best;
+}
+/** Bâtiment (auvents compris) dont l'emprise contient le point, ou undefined. */
+const batiGrid = new Map();
+for (const b of keptBuildings) {
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const p of b.pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+  for (let i = Math.floor(x0 / 50); i <= Math.floor(x1 / 50); i++) for (let j = Math.floor(z0 / 50); j <= Math.floor(z1 / 50); j++) {
+    const k = `${i},${j}`;
+    let l = batiGrid.get(k); if (!l) batiGrid.set(k, (l = [])); l.push(b);
+  }
+}
+const dansBati = (x, z) => (batiGrid.get(`${Math.floor(x / 50)},${Math.floor(z / 50)}`) ?? []).find((b) => SOL.dansAnneau(b.pts, x, z));
+
+// ───────────────────────── Espaces : parcs, places, terrains, massifs ─────────────────────────
+// Chaque surface OSM reconnue (tools/lib/sol.mjs) devient un espace, avec son revêtement et ses trous.
 const areas = [];
-function addArea(kind, ring, tags) {
-  let pts = G.simplifyRing(ring, 0.2);
+let massifsEcartes = 0;
+function addArea(tags, relation, outer, holes) {
+  let pts = G.simplifyRing(outer, 0.2);
   if (pts.length < 3) return;
-  let a = G.ringArea(pts);
-  if (Math.abs(a) < 12) return;
-  if (a < 0) pts.reverse();
+  const aire = Math.abs(G.ringArea(pts));
+  const nat = SOL.nature(tags, relation, aire);
+  if (!nat) return;
+  if (aire < (nat.k === 'massif' ? 3 : 12)) return;
   if (!pts.some(inRect)) return;
-  areas.push({ kind, pts, name: tags.name, sport: tags.sport });
+  // même sens pour tous : sous la règle « non nul », deux anneaux de sens contraires s'annuleraient
+  if (G.ringArea(pts) < 0) pts.reverse();
+  let paths = [toPath(pts)];
+  if (!C.Clipper.Orientation(paths[0])) paths[0].reverse();
+  const trous = holes.map((h) => G.simplifyRing(h, 0.2)).filter((h) => h.length >= 3);
+  if (trous.length) paths = boolOp(DIFF, paths, trous.map(toPath));
+  // un massif se voit en relief : son contour arrête une voiture, comme celui des haies surfaciques
+  // (déjà dans les barrières). On ne le garde que s'il ne mord pas sur la chaussée du jeu.
+  if (nat.k === 'massif' && tags.barrier !== 'hedge') {
+    let libre = true;
+    for (let i = 0; i < pts.length && libre; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length], n = Math.max(1, Math.ceil(G.dist(a, b)));
+      for (let k = 0; k < n && libre; k++) if (onRoad(a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n)) libre = false;
+    }
+    // s'il mord sur la chaussée, il n'est pas dessiné du tout : un volume qu'on traverse est pire qu'un massif en moins
+    if (!libre) { massifsEcartes++; return; }
+    barriers.push({ kind: 'massif', pts: [...pts, pts[0]], h: nat.e / 10 });
+  }
+  areas.push({ ...nat, kind: nat.k, pts, paths, aire: aire - trous.reduce((t, h) => t + Math.abs(G.ringArea(h)), 0), name: tags.name, trous: trous.length });
 }
 for (const w of ways.values()) {
-  const k = areaKind(w.tags);
-  if (!k) continue;
   if (w.nds.length < 4 || w.nds[0] !== w.nds[w.nds.length - 1]) continue;
-  addArea(k, wayRing(w), w.tags);
+  if (!SOL.nature(w.tags, false, 0)) continue;
+  addArea(w.tags, false, wayRing(w), []);
 }
 for (const rel of relations.values()) {
   if (rel.tags.type !== 'multipolygon') continue;
-  const k = areaKind(rel.tags);
-  if (!k) continue;
-  for (const ring of relationRings(rel)) addArea(k, ring, rel.tags);
+  if (!SOL.nature(rel.tags, true, 0)) continue;
+  for (const poly of SOL.rangerTrous(relationRings(rel), relationRings(rel, true))) addArea(rel.tags, true, poly.o, poly.h);
+}
+{
+  const par = {};
+  for (const a of areas) { const e = (par[a.kind] ??= [0, 0]); e[0]++; e[1] += a.aire; }
+  log(`espaces : ${areas.length} (${areas.filter((a) => a.trous).length} à trous, ${massifsEcartes} massifs écartés parce qu'ils mordent sur la chaussée) — ` + Object.entries(par).map(([k, e]) => `${k} ${e[0]} (${(e[1] / 1e4).toFixed(2)} ha)`).join(', '));
 }
 
-// Découpe des espaces (pelouses, places…) par dalle, chaussée retirée
+// Végétation relevée sur la photo aérienne (tools/fetch-ortho.mjs --prepare, après une première
+// compilation de la carte) : jardins et arbres que la carte OpenStreetMap ne décrit pas. Sans ce relevé,
+// les jardins sont déduits du bâti et seuls les arbres cartographiés sont plantés.
+let vegetation = null;
+try {
+  vegetation = SOL.lireVegetation(JSON.parse(readFileSync(new URL('../data/ortho-raw/vegetation.json', import.meta.url), 'utf8')));
+} catch { /* pas de relevé */ }
+log(vegetation ? `végétation de la photo aérienne : ${vegetation.l} × ${vegetation.h} cases de ${vegetation.cote} m, ${vegetation.arbres.length} houppiers` : 'végétation de la photo aérienne : pas de relevé (data/ortho-raw/vegetation.json)');
+
+// ───────────────────────── Sol par défaut des cœurs d'îlot : jardin ou cour ─────────────────────────
+// OpenStreetMap ne décrit ni les jardins privés ni les cours : on les déduit du bâti. Un îlot de
+// pavillons est en herbe, tout le reste est minéral (cour, dalle, enrobé). Les pelouses des grands
+// ensembles, elles, sont cartographiées (landuse=grass) et restent vertes par-dessus.
+let jardins = [];
 {
-  const order = { water: 0, park: 1, grass: 2, wood: 3, pitch: 4, cemetery: 5, plaza: 6, parking: 7, dirt: 8 };
-  let n = 0;
-  const byCell = new Map();
-  for (const a of areas) {
+  const GRAND = 20000; // m² : au-delà, l'îlot mêle souvent pavillons et immeubles
+  const offset = (paths, d) => {
+    const co = new C.ClipperOffset(2, 25);
+    co.AddPaths(paths, C.JoinType.jtRound, C.EndType.etClosedPolygon);
+    const out = new C.Paths(); co.Execute(out, d * SCALE); return out;
+  };
+  const ilots = boolEx(DIFF, rectPath(RECT.x0, RECT.z0, RECT.x1, RECT.z1), band).map((e) => {
+    const o = e.outer.map((p) => [p.X / SCALE, p.Y / SCALE]);
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const p of o) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+    return { ex: e, o, h: e.holes.map((h) => h.map((p) => [p.X / SCALE, p.Y / SCALE])), box: [x0, z0, x1, z1], bats: [], aire: (Math.abs(C.Clipper.Area(e.outer)) - e.holes.reduce((t, h) => t + Math.abs(C.Clipper.Area(h)), 0)) / (SCALE * SCALE) };
+  });
+  for (const b of keptBuildings) {
+    const c = G.ringCentroid(b.pts);
+    const il = ilots.find((i) => c[0] >= i.box[0] && c[0] <= i.box[2] && c[1] >= i.box[1] && c[1] <= i.box[3] && SOL.dansAnneau(i.o, c[0], c[1]) && !i.h.some((h) => SOL.dansAnneau(h, c[0], c[1])));
+    if (il) il.bats.push({ t: b.type, l: b.lv, aire: b.area, pts: b.pts });
+  }
+  let nJ = 0, nC = 0, nG = 0, all = [];
+  if (vegetation) {
+    // La photo aérienne dit où le sol est vert : les cases de jardin du relevé remplacent la déduction
+    // par le bâti. Leur contour en escalier est simplifié à 3,2 m près (la limite ne suit plus les cases,
+    // et la carte ne s'alourdit pas de milliers de sommets) ; les lambeaux et les petits trous sont écartés.
+    const cases = SOL.casesJardin(vegetation).map(([x0, z0, x1, z1]) => rectPath(x0, z0, x1, z1)[0]);
+    const lisse = (ring) => toPath(G.simplifyRing(ring.map((p) => [p.X / SCALE, p.Y / SCALE]), 3.2));
+    let v = [];
+    for (const e of boolEx(UNION, cases, null)) {
+      if (Math.abs(C.Clipper.Area(e.outer)) / (SCALE * SCALE) < 220) continue;
+      const o = lisse(e.outer);
+      if (o.length < 3) continue;
+      const trous = e.holes.filter((h) => Math.abs(C.Clipper.Area(h)) / (SCALE * SCALE) >= 100).map(lisse).filter((h) => h.length >= 3);
+      v = v.concat(trous.length ? boolOp(DIFF, [o], trous) : [o]);
+    }
+    v = boolOp(INTER, boolOp(UNION, v, null), ilots.flatMap((il) => [il.ex.outer, ...il.ex.holes]));
+    v = C.Clipper.CleanPolygons(v, 40).filter((p) => p.length >= 3);
+    for (const e of boolEx(UNION, v, null)) {
+      if (Math.abs(C.Clipper.Area(e.outer)) / (SCALE * SCALE) < 120) continue;
+      all.push(e.outer); nJ++;
+      for (const h of e.holes) if (Math.abs(C.Clipper.Area(h)) / (SCALE * SCALE) >= 60) all.push(h);
+    }
+  } else for (const il of ilots) {
+    const contour = [il.ex.outer, ...il.ex.holes];
+    if (il.aire <= GRAND) {
+      if (SOL.tissu(il.bats) === 'jardin') { all = all.concat(contour); nJ++; } else nC++;
+      continue;
+    }
+    // grand îlot : en herbe à moins de 28 m d'une maison, sauf à moins de 12 m d'un immeuble
+    nG++;
+    const maisons = il.bats.filter((b) => b.t !== 'roof' && SOL.estMaison(b)), autres = il.bats.filter((b) => b.t !== 'roof' && !SOL.estMaison(b));
+    if (!maisons.length) continue;
+    let g = offset(offset(maisons.map((b) => toPath(b.pts)), 32), -4);
+    if (autres.length) g = boolOp(DIFF, g, offset(autres.map((b) => toPath(b.pts)), 12));
+    g = boolOp(INTER, g, contour);
+    g = C.Clipper.CleanPolygons(g, 20).filter((p) => p.length >= 3);
+    // les lambeaux de moins de 80 m² ne sont pas des jardins
+    for (const e of boolEx(UNION, g, null)) {
+      if (Math.abs(C.Clipper.Area(e.outer)) / (SCALE * SCALE) < 80) continue;
+      all.push(e.outer); for (const h of e.holes) all.push(h);
+    }
+  }
+  jardins = boolOp(UNION, all, null);
+  log(vegetation ? `cœurs d'îlot : ${ilots.length} îlots, ${nJ} jardins relevés sur la photo aérienne ; jardins` : `cœurs d'îlot : ${ilots.length} îlots — ${nJ} en jardin, ${nC} en cour, ${nG} grands îlots recoupés ; jardins ${(areaM2(jardins) / 1e4).toFixed(1)} ha, ${nVerts(jardins)} sommets`);
+}
+
+// ───────────────────────── Jardins de devant et clôtures sur rue ─────────────────────────
+// La bande de 6 m le long de la chaussée est du trottoir : devant un pavillon, la maison se retrouvait
+// posée sur une dalle continue jusqu'à la bordure. Là où un jardin (relevé sur la photo) borde la rue,
+// le trottoir est ramené à TROTTOIR_JARDIN m ; au-delà, la bande devient un jardin de devant, fermé
+// sur la rue par une clôture (muret, haie) coupée d'un portail à chaque parcelle. Rien de tout cela
+// n'est cartographié : c'est déduit, et les barrières créées portent d: 1.
+const TROTTOIR_JARDIN = 3;
+if (vegetation && jardins.length) {
+  const offset = (paths, d) => {
+    const co = new C.ClipperOffset(2, 25);
+    co.AddPaths(paths, C.JoinType.jtRound, C.EndType.etClosedPolygon);
+    const out = new C.Paths(); co.Execute(out, d * SCALE); return out;
+  };
+  const ailleurs = boolOp(UNION, areas.flatMap((a) => a.paths).concat(bandePietonne), null);
+  const GARDE_DEVANT = 0.15;
+  const derriere = boolOp(DIFF, offset(jardins, TROTTOIR_JARDIN + 0.3), offset(ailleurs, GARDE_DEVANT));
+  const ligne = inflate(road, TROTTOIR_JARDIN);
+  let devant = boolOp(INTER, boolOp(DIFF, inflate(road, SIDEWALK_BAND - GARDE_DEVANT), ligne), derriere);
+  // nettoyage (lames, sommets en trop) : il déplace des sommets de 10 cm au plus, d'où la garde de
+  // GARDE_DEVANT m laissée autour des espaces voisins et du cœur d'îlot, pour ne rien recouvrir
+  devant = C.Clipper.CleanPolygons(ouvrir(devant, 0.4), 10).filter((p) => p.length >= 3 && Math.abs(C.Clipper.Area(p)) >= 8 * SCALE * SCALE);
+  const pts = devant.flatMap((p) => p.map((q) => [q.X / SCALE, q.Y / SCALE]));
+  if (pts.length) areas.push({ k: 'devant', kind: 'devant', pts, paths: devant, aire: areaM2(devant), pret: true });
+  // clôtures : la ligne à TROTTOIR_JARDIN m de la chaussée, là où un jardin est derrière
+  const c = new C.Clipper();
+  for (const r of ligne) c.AddPath(r.concat([r[0]]), C.PolyType.ptSubject, false);
+  c.AddPaths(boolOp(INTER, derriere, offset(devant, 0.5)), C.PolyType.ptClip, true);
+  const arbre = new C.PolyTree();
+  c.Execute(INTER, arbre, NZ, NZ);
+  let n = 0, km = 0, nb = 0;
+  for (const chemin of C.Clipper.OpenPathsFromPolyTree(arbre)) {
+    const q = G.simplifyDP(chemin.map((p) => [p.X / SCALE, p.Y / SCALE]), 0.45);
+    if (G.polyLen(q) < 4) continue;
+    for (const m of SOL.decouperCloture(q, hash32(`${r2(q[0][0])}|${r2(q[0][1])}`))) {
+      // ni dans un bâtiment (maison à l'alignement), ni sur la chaussée
+      let libre = true;
+      const len = G.polyLen(m.pts);
+      for (let d = 0; d <= len && libre; d += 0.75) { const p = G.pointAt(m.pts, d); if (dansBati(p.x, p.z) || onRoad(p.x, p.z)) libre = false; }
+      if (!libre) { nb++; continue; }
+      n++; km += len / 1000;
+      if (m.muret) barriers.push({ kind: 'muret', pts: m.pts, h: m.muret, c: m.ton, d: 1 });
+      if (m.haie) {
+        // la haie pousse derrière le muret, côté jardin
+        const dedans = m.pts.map((p) => {
+          const b = bordProche(p[0], p[1], TROTTOIR_JARDIN + 1.5);
+          if (!b || b.d < 0.01) return p;
+          const k = (m.muret ? 0.4 : 0.1) / b.d;
+          return [p[0] + (p[0] - b.x) * k, p[1] + (p[1] - b.z) * k];
+        });
+        barriers.push({ kind: 'hedge', pts: dedans, h: m.haie, d: 1 });
+      }
+    }
+  }
+  log(`jardins de devant : ${(areaM2(devant) / 1e4).toFixed(1)} ha, ${nVerts(devant)} sommets ; clôtures sur rue : ${n} parcelles, ${km.toFixed(1)} km (${nb} écartées : bâtiment à l'alignement)`);
+}
+
+// Sol sans recouvrement : dans l'ordre de superposition (SOL.ordreDessus), chaque espace est amputé
+// de la chaussée et des espaces qui le recouvrent, et le cœur d'îlot de tous les espaces. Tout le sol
+// d'une dalle est alors un pavage, sans faces superposées qui scintillent. Les soustractions se font
+// sur la carte entière, la découpe en dalles en dernier : soustraire dalle par dalle laissait des
+// trous collés au bord de la dalle, que la triangulation ne sait pas traiter.
+const sansEclats = (ex) => ex.filter((e) => Math.abs(C.Clipper.Area(e.outer)) >= 0.5 * SCALE * SCALE);
+/**
+ * Ouverture morphologique de 10 cm : retire les pointes et les lames plus fines que 20 cm, et sépare
+ * un trou collé au contour (arêtes communes laissées par une soustraction). Sans cela, la
+ * triangulation du rendu (earcut) déborde du polygone.
+ */
+function ouvrir(paths, d = 0.1) {
+  const off = (p, dd) => {
+    const co = new C.ClipperOffset(8, ARC_TOL);
+    co.AddPaths(p, C.JoinType.jtMiter, C.EndType.etClosedPolygon);
+    const out = new C.Paths(); co.Execute(out, dd * SCALE); return out;
+  };
+  return off(off(paths, -d), d);
+}
+function interEx(subj, rect) {
+  const c = new C.Clipper();
+  c.StrictlySimple = true;
+  c.AddPaths(subj, C.PolyType.ptSubject, true);
+  c.AddPaths(rect, C.PolyType.ptClip, true);
+  const tree = new C.PolyTree();
+  c.Execute(INTER, tree, NZ, NZ);
+  return sansEclats(C.JS.PolyTreeToExPolygons(tree));
+}
+{
+  const boite = (a) => {
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const p of a.pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
-    a.path = toPath(a.pts);
+    return [x0, z0, x1, z1];
+  };
+  const ordre = areas.slice().sort(SOL.ordreDessus);
+  const byCell = new Map();
+  ordre.forEach((a, i) => {
+    a.box = boite(a);
+    const [x0, z0, x1, z1] = a.box;
+    if (a.pret) {
+      // déjà découpé (jardins de devant) : ni chaussée ni autre espace dessous
+      a.vis = a.paths;
+      for (const k of Object.keys(chunks)) { let l = byCell.get(k); if (!l) byCell.set(k, (l = [])); l.push(a); }
+      return;
+    }
+    let vis = a.paths;
+    let roadHere = [];
+    for (let ci = Math.floor(x0 / CHUNK); ci <= Math.floor(x1 / CHUNK); ci++) for (let cj = Math.floor(z0 / CHUNK); cj <= Math.floor(z1 / CHUNK); cj++) roadHere = roadHere.concat(roadCells.get(`${ci},${cj}`) ?? []);
+    if (roadHere.length) vis = boolOp(DIFF, vis, roadHere);
+    const dessus = ordre.slice(0, i).filter((b) => !b.pret && b.box[0] < x1 && b.box[2] > x0 && b.box[1] < z1 && b.box[3] > z0).flatMap((b) => b.paths);
+    if (dessus.length && vis.length) vis = boolOp(DIFF, vis, dessus);
+    a.vis = vis = ouvrir(vis);
+    if (!vis.length) return;
     for (let ci = Math.floor(x0 / CHUNK); ci <= Math.floor(x1 / CHUNK); ci++) for (let cj = Math.floor(z0 / CHUNK); cj <= Math.floor(z1 / CHUNK); cj++) {
       const k = `${ci},${cj}`;
       if (!chunks[k]) continue;
       let l = byCell.get(k); if (!l) byCell.set(k, (l = [])); l.push(a);
     }
-  }
-  for (const [k, list] of byCell) {
-    const [ci, cj] = k.split(',').map(Number);
-    const x0 = ci * CHUNK, z0 = cj * CHUNK;
-    const rect = rectPath(x0, z0, x0 + CHUNK, z0 + CHUNK);
-    const roadHere = boolOp(INTER, road, rect);
-    const out = [];
-    for (const a of list) {
-      let clip = boolOp(INTER, [a.path], rect);
-      if (!clip.length) continue;
-      if (roadHere.length) clip = boolOp(DIFF, clip, roadHere);
-      if (!clip.length) continue;
-      const polys = exToPolys(boolEx(UNION, clip, null), x0, z0);
-      for (const poly of polys) { out.push({ k: a.kind, o: poly.o, h: poly.h }); n++; }
+  });
+  // cœurs d'îlot : tout ce qui n'est ni chaussée, ni bande de trottoir, ni espace
+  const tous = boolOp(UNION, areas.flatMap((a) => a.paths), null);
+  const coeur = boolOp(DIFF, boolOp(DIFF, rectPath(RECT.x0, RECT.z0, RECT.x1, RECT.z1), band), tous);
+  const jardG = ouvrir(boolOp(INTER, coeur, jardins)), courG = ouvrir(boolOp(DIFF, coeur, jardins));
+  log(`cœurs d'îlot hors espaces : jardins ${(areaM2(jardG) / 1e4).toFixed(1)} ha, cours ${(areaM2(courG) / 1e4).toFixed(1)} ha (bâti compris)`);
+  let n = 0, nJ = 0, nC = 0, vA = 0, vJ = 0, vC = 0;
+  for (let ci = ci0; ci <= ci1; ci++) {
+    const colRect = rectPath(ci * CHUNK, RECT.z0 - 500, (ci + 1) * CHUNK, RECT.z1 + 500);
+    const jardCol = boolOp(INTER, jardG, colRect), courCol = boolOp(INTER, courG, colRect);
+    for (let cj = cj0; cj <= cj1; cj++) {
+      const k = `${ci},${cj}`;
+      const x0 = ci * CHUNK, z0 = cj * CHUNK;
+      const rect = rectPath(x0, z0, x0 + CHUNK, z0 + CHUNK);
+      const out = [];
+      for (const a of byCell.get(k) ?? []) {
+        for (const poly of exToPolys(interEx(a.vis, rect), x0, z0)) {
+          const o = { k: a.kind, o: poly.o, h: poly.h };
+          if (a.s) o.s = a.s;
+          if (a.e) o.e = a.e;
+          out.push(o); n++; vA += countV([poly]);
+        }
+      }
+      if (out.length) chunks[k].a = out;
+      const g = jardCol.length ? exToPolys(interEx(jardCol, rect), x0, z0) : [];
+      const c = courCol.length ? exToPolys(interEx(courCol, rect), x0, z0) : [];
+      if (g.length) { chunks[k].g = g; nJ += g.length; vJ += countV(g); }
+      if (c.length) { chunks[k].c = c; nC += c.length; vC += countV(c); }
     }
-    out.sort((p, q) => (order[p.k] ?? 9) - (order[q.k] ?? 9));
-    if (out.length) chunks[k].a = out;
   }
-  log(`espaces découpés par dalle : ${n} polygones`);
+  log(`sol par dalle : ${n} polygones d'espaces (${vA} sommets), ${nJ} de jardin (${vJ}), ${nC} de cour (${vC})`);
 }
 
-// voies piétonnes linéaires et voies de tram (décor)
+// Voies piétonnes linéaires et voies de tram (servent au rattachement des devantures), allées et
+// escaliers : seules les portions qui traversent de l'herbe sont gardées, ailleurs le sol est déjà minéral.
 const lines = [];
-for (const w of ways.values()) {
-  const t = w.tags;
-  let kind = null;
-  if (t.highway === 'pedestrian' && t.area !== 'yes') kind = 'ped';
-  else if (t.railway === 'tram') kind = 'tram';
-  if (!kind) continue;
-  if (t.tunnel && t.tunnel !== 'no') continue;
-  let pts = w.nds.map((id) => nodeXZ.get(id)).filter(Boolean);
-  if (pts.length < 2 || !pts.some(inRect)) continue;
-  lines.push({ kind, pts: G.simplifyDP(pts, 0.1), name: t.name });
+{
+  const veg = areas.filter((a) => SOL.VEGETAL.test(a.kind)).flatMap((a) => a.paths);
+  const autres = areas.filter((a) => !SOL.VEGETAL.test(a.kind) && a.kind !== 'massif').flatMap((a) => a.paths);
+  const herbe = boolOp(DIFF, boolOp(UNION, veg.concat(jardins), null), boolOp(UNION, autres.concat(road), null));
+  const herbeCells = new Set(), herbeBox = [];
+  for (const p of herbe) {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const q of p) { x0 = Math.min(x0, q.X); x1 = Math.max(x1, q.X); z0 = Math.min(z0, q.Y); z1 = Math.max(z1, q.Y); }
+    herbeBox.push([x0 / SCALE, z0 / SCALE, x1 / SCALE, z1 / SCALE]);
+    for (let i = Math.floor(x0 / SCALE / CHUNK); i <= Math.floor(x1 / SCALE / CHUNK); i++) for (let j = Math.floor(z0 / SCALE / CHUNK); j <= Math.floor(z1 / SCALE / CHUNK); j++) herbeCells.add(`${i},${j}`);
+  }
+  const LARGEUR = { footway: 2.2, path: 1.6, steps: 2.2, cycleway: 2.6, track: 2.8, service: 3.2, pedestrian: 4 };
+  let km = 0, nAl = 0;
+  for (const w of ways.values()) {
+    const t = w.tags;
+    if (t.tunnel && t.tunnel !== 'no') continue;
+    let pts = w.nds.map((id) => nodeXZ.get(id)).filter(Boolean);
+    if (pts.length < 2 || !pts.some(inRect)) continue;
+    if (t.highway === 'pedestrian' && t.area !== 'yes') lines.push({ kind: 'ped', pts: G.simplifyDP(pts, 0.1), name: t.name });
+    else if (t.railway === 'tram') lines.push({ kind: 'tram', pts: G.simplifyDP(pts, 0.1), name: t.name });
+    if (!(t.highway in LARGEUR) || t.area === 'yes') continue;
+    if (t.highway === 'service' && drivable(w)) continue;
+    if (t.indoor === 'yes' || +t.level < 0 || +t.layer < 0 || t.location === 'underground' || t.covered === 'yes') continue;
+    if (t.footway === 'crossing') continue;
+    if (!pts.some((p) => herbeCells.has(`${Math.floor(p[0] / CHUNK)},${Math.floor(p[1] / CHUNK)}`))) continue;
+    pts = G.simplifyDP(pts, 0.3);
+    const c = new C.Clipper();
+    c.AddPath(toPath(pts), C.PolyType.ptSubject, false);
+    let bx0 = Infinity, bx1 = -Infinity, bz0 = Infinity, bz1 = -Infinity;
+    for (const q of pts) { bx0 = Math.min(bx0, q[0]); bx1 = Math.max(bx1, q[0]); bz0 = Math.min(bz0, q[1]); bz1 = Math.max(bz1, q[1]); }
+    // seuls les anneaux d'herbe qui croisent l'emprise du chemin (un trou est toujours dans l'emprise de son contour)
+    const ici = herbe.filter((_, k) => { const b = herbeBox[k]; return b[0] < bx1 && b[2] > bx0 && b[1] < bz1 && b[3] > bz0; });
+    if (!ici.length) continue;
+    c.AddPaths(ici, C.PolyType.ptClip, true);
+    const tree = new C.PolyTree();
+    c.Execute(INTER, tree, NZ, NZ);
+    const larg = Math.min(6, parseFloat(t.width) || LARGEUR[t.highway]);
+    for (const path of C.Clipper.OpenPathsFromPolyTree(tree)) {
+      const q = path.map((p) => [p.X / SCALE, p.Y / SCALE]);
+      const len = G.polyLen(q);
+      if (len < 2.5) continue;
+      const l = { kind: t.highway === 'steps' ? 'marches' : 'allee', pts: q, w: Math.round(larg * 10) };
+      const s = SOL.revetement(t.surface);
+      if (s) l.s = s;
+      lines.push(l); km += len / 1000; nAl++;
+    }
+  }
+  log(`allées et escaliers dans l'herbe : ${nAl} tronçons, ${km.toFixed(1)} km`);
 }
 
 const trees = [], lamps = [], pois = [];
 const stations = stationsDeMetro(relations);
+// Mobilier ponctuel : jamais sur la chaussée ni dans un bâtiment. Ce qui est saisi sur une bande de
+// stationnement (arceaux vélo, conteneurs) est reporté sur le trottoir le plus proche, à 2,5 m au plus.
+const MOBILIER = /^(bench|bollard|bin|recycling|postbox|velib|bikepark|hydrant|eau|table|wc)$/;
+const mob = { garde: 0, deplace: 0, chaussee: 0, bati: 0, interieur: 0 };
 for (const n of nodes.values()) {
   const t = n.tags;
   const p = nodeXZ.get(n.id);
@@ -1003,9 +1299,27 @@ for (const n of nodes.values()) {
     else if (t.railway === 'subway_entrance') k = 'metro';
     else if (t.amenity === 'pharmacy') k = 'pharmacy';
     else if (t.emergency === 'fire_hydrant') k = 'hydrant';
+    else if (t.amenity === 'drinking_water') k = 'eau';
+    else if (t.leisure === 'picnic_table') k = 'table';
+    else if (t.amenity === 'toilets') k = 'wc';
     else if (t.shop || (t.amenity && /^(restaurant|cafe|bar|fast_food|bank|driving_school|pub)$/.test(t.amenity))) k = 'shop';
     if (!k) continue;
     const o = { k, x: r2(p[0]), z: r2(p[1]) };
+    if (MOBILIER.test(k)) {
+      if (t.indoor === 'yes' || +t.level < 0 || +t.layer < 0 || t.location === 'underground' || t.location === 'indoor'
+        || (k === 'recycling' && t.recycling_type === 'centre') || (k === 'hydrant' && t['fire_hydrant:type'] === 'underground')) { mob.interieur++; continue; }
+      // un potelet saisi sur la chaussée barre une voie que le jeu laisse ouverte : on ne le pose pas
+      const q = k === 'bollard' ? (onRoad(p[0], p[1]) ? null : p) : SOL.versTrottoir(p[0], p[1], onRoad);
+      if (!q) { mob.chaussee++; continue; }
+      if (dansBati(q[0], q[1])) { mob.bati++; continue; }
+      if (q[0] !== p[0] || q[1] !== p[1]) mob.deplace++;
+      mob.garde++;
+      o.x = r2(q[0]); o.z = r2(q[1]);
+      const cap = parseInt(t.capacity);
+      if (cap > 0 && (k === 'bikepark' || k === 'velib')) o.c = cap;
+      const dir = parseFloat(t.direction);
+      if (k === 'bench' && Number.isFinite(dir)) o.d = Math.round(dir);
+    }
     if (t.name) o.n = t.name;
     if (k === 'shop') o.t = t.shop ?? t.amenity;
     // l'enseigne d'une chaîne décide de la couleur du bandeau quand le nom seul ne la dit pas
@@ -1025,35 +1339,68 @@ for (const n of nodes.values()) {
     pois.push(o);
   }
 }
+log(`mobilier : ${mob.garde} objets gardés (${mob.deplace} reportés sur le trottoir), écartés : ${mob.chaussee} sur la chaussée, ${mob.bati} dans un bâtiment, ${mob.interieur} en intérieur ou enterrés`);
 for (const w of ways.values()) {
   if (w.tags.natural !== 'tree_row') continue;
   const pts = w.nds.map((id) => nodeXZ.get(id)).filter(Boolean);
   const len = G.polyLen(pts);
+  const genre = (w.tags.genus ?? w.tags.species ?? '').split(' ')[0].toLowerCase();
   for (let s = 0; s <= len; s += 9) {
     const p = G.pointAt(pts, s);
-    if (inRect([p.x, p.z])) trees.push([r2(p.x), r2(p.z), 0, 0, '']);
+    if (inRect([p.x, p.z])) trees.push([r2(p.x), r2(p.z), 0, 0, genre]);
   }
 }
-// arbres plantés sur la chaussée (imprécision de saisie) : on les retire
+// Arbres : jamais sur la chaussée ni dans un bâtiment. Un arbre saisi à moins de 1,2 m à l'intérieur
+// du bord (imprécision de saisie, ou chaussée du jeu un peu plus large que la vraie) est reporté à
+// 0,8 m sur le trottoir, comme ceux qui frôlent la bordure ; plus loin dans la chaussée, il est retiré.
 {
-  const before = trees.length;
-  const onRoad = (x, z) => {
-    const ck = chunks[`${Math.floor(x / CHUNK)},${Math.floor(z / CHUNK)}`];
-    if (!ck) return false;
-    const lx = (x - Math.floor(x / CHUNK) * CHUNK) * SCALE, lz = (z - Math.floor(z / CHUNK) * CHUNK) * SCALE;
-    const inside = (ring) => {
-      let c = false;
-      for (let i = 0, n = ring.length / 2, j = n - 1; i < n; j = i++) {
-        const xi = ring[i * 2], zi = ring[i * 2 + 1], xj = ring[j * 2], zj = ring[j * 2 + 1];
-        if ((zi > lz) !== (zj > lz) && lx < ((xj - xi) * (lz - zi)) / (zj - zi) + xi) c = !c;
-      }
-      return c;
-    };
-    for (const poly of ck.r) if (inside(poly.o) && !poly.h.some(inside)) return true;
+  const st = { avant: trees.length, deplaces: 0, chaussee: 0, bati: 0 };
+  for (let i = trees.length - 1; i >= 0; i--) {
+    const t = trees[i];
+    const dedans = onRoad(t[0], t[1]);
+    const q = SOL.ecarterArbre(t[0], t[1], bordProche(t[0], t[1]), dedans);
+    if (!q || onRoad(q[0], q[1]) || (bordProche(q[0], q[1], 0.7)?.d ?? 1) < 0.7) { trees.splice(i, 1); st.chaussee++; continue; }
+    if (dansBati(q[0], q[1])) { trees.splice(i, 1); st.bati++; continue; }
+    if (q[0] !== t[0] || q[1] !== t[1]) { t[0] = r2(q[0]); t[1] = r2(q[1]); st.deplaces++; }
+  }
+  log(`arbres : ${trees.length} sur ${st.avant} (${st.deplaces} écartés du bord de chaussée, ${st.chaussee} retirés de la chaussée, ${st.bati} retirés d'un bâtiment), lampadaires : ${lamps.length}, points : ${pois.length}`);
+}
+
+// Arbres relevés sur la photo aérienne : ceux des squares, des places et des jardins, que la carte
+// OpenStreetMap ne connaît pas (elle ne relève guère que les arbres d'alignement). Ils sont ajoutés
+// après coup : les largeurs de chaussée, bornées par les arbres cartographiés, ne dépendent pas d'eux.
+// Au plus QUOTA_ARBRES par dalle (budget de rendu), les grands houppiers et les bords de rue d'abord.
+const QUOTA_ARBRES = 10;
+if (vegetation) {
+  const connus = new Map();
+  const cle = (x, z) => `${Math.floor(x / 10)},${Math.floor(z / 10)}`;
+  for (const t of trees) { const k = cle(t[0], t[1]); let l = connus.get(k); if (!l) connus.set(k, (l = [])); l.push(t); }
+  const pres = (x, z, d) => {
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const t of connus.get(cle(x + i * 10, z + j * 10)) ?? []) if (Math.hypot(t[0] - x, t[1] - z) < d) return true;
     return false;
   };
-  for (let i = trees.length - 1; i >= 0; i--) if (onRoad(trees[i][0], trees[i][1])) trees.splice(i, 1);
-  log(`arbres : ${trees.length} (${before - trees.length} retirés de la chaussée), lampadaires : ${lamps.length}, points : ${pois.length}`);
+  // ni sur un terrain de sport, ni dans un bassin
+  const interdits = areas.filter((a) => a.kind === 'pitch' || a.kind === 'water');
+  for (const a of interdits) if (!a.box) { let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; for (const p of a.pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); } a.box = [x0, z0, x1, z1]; }
+  const parDalle = new Map();
+  const st = { releves: vegetation.arbres.length, chaussee: 0, bati: 0, terrain: 0, doublon: 0 };
+  for (const [x, z, r] of vegetation.arbres) {
+    if (!inRect([x, z])) continue;
+    // le tronc à 1,5 m au moins de la bordure : un arbre de jardin ne borne pas la chaussée
+    const bord = bordProche(x, z, 40);
+    if (onRoad(x, z) || (bord && bord.d < 1.5)) { st.chaussee++; continue; }
+    if (dansBati(x, z)) { st.bati++; continue; }
+    if (interdits.some((a) => x >= a.box[0] && x <= a.box[2] && z >= a.box[1] && z <= a.box[3] && SOL.dansAnneau(a.pts, x, z))) { st.terrain++; continue; }
+    if (pres(x, z, 4)) { st.doublon++; continue; }
+    const k = `${Math.floor(x / CHUNK)},${Math.floor(z / CHUNK)}`;
+    let l = parDalle.get(k); if (!l) parDalle.set(k, (l = []));
+    l.push({ x, z, r, route: bord ? bord.d : 40 });
+  }
+  let n = 0;
+  for (const k of [...parDalle.keys()].sort()) {
+    for (const a of SOL.choisirArbres(parDalle.get(k), QUOTA_ARBRES)) { trees.push([r2(a.x), r2(a.z), SOL.hauteurArbre(a.r), 0, '', 1]); n++; }
+  }
+  log(`arbres de la photo aérienne : ${n} plantés sur ${st.releves} houppiers relevés (quota de ${QUOTA_ARBRES} par dalle ; écartés : ${st.chaussee} sur la chaussée ou à sa bordure, ${st.bati} dans un bâtiment, ${st.terrain} sur un terrain ou un bassin, ${st.doublon} déjà cartographiés) ; ${trees.length} arbres en tout`);
 }
 
 // ───────────────────────── Commerces : rattachement à la façade ─────────────────────────
@@ -1080,14 +1427,22 @@ for (const w of ways.values()) {
 }
 
 // ───────────────────────── Écriture ─────────────────────────
+/** Mention de la photo aérienne du sol, si ses dalles sont livrées (tools/fetch-ortho.mjs), avec sa date de prise de vue. */
+function mentionOrtho() {
+  try {
+    const ix = JSON.parse(readFileSync(new URL('../public/ortho/index.json', import.meta.url), 'utf8'));
+    const dates = (ix.prises ?? []).map((d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }));
+    return ` · Photographies aériennes : IGN – BD ORTHO${dates.length ? ', prise de vue du ' + dates.join(' et du ') : ''} (Licence Ouverte Etalab 2.0)`;
+  } catch { return ''; }
+}
 const flat = (pts) => { const a = []; for (const p of pts) a.push(r2(p[0]), r2(p[1])); return a; };
 const out = {
   version: 1,
   name: 'Montreuil – Paris 20e',
   // la Licence Ouverte impose la mention de la source dès que les attributs IGN sont dans la carte
-  attribution: ignUsed
+  attribution: (ignUsed
     ? '© les contributeurs d’OpenStreetMap (ODbL) · Bâtiments : IGN – BD TOPO (Licence Ouverte Etalab 2.0)'
-    : '© les contributeurs d’OpenStreetMap (ODbL)',
+    : '© les contributeurs d’OpenStreetMap (ODbL)') + mentionOrtho(),
   origin: { lat: LAT0, lon: LON0 },
   rect: { x0: r2(RECT.x0), z0: r2(RECT.z0), x1: r2(RECT.x1), z1: r2(RECT.z1) },
   chunk: CHUNK,
@@ -1122,9 +1477,9 @@ const out = {
     if (b.leger) o.lg = 1;
     return o;
   }),
-  barriers: barriers.map((b) => ({ k: b.kind, h: b.h, p: flat(b.pts) })),
+  barriers: barriers.map((b) => { const o = { k: b.kind, h: b.h, p: b.d ? flat(b.pts).map((v) => Math.round(v * 10) / 10) : flat(b.pts) }; if (b.c !== undefined) o.c = b.c; if (b.d) o.d = 1; return o; }),
   areas: areas.filter((a) => a.name).map((a) => { const c = G.ringCentroid(a.pts); return { k: a.kind, x: r2(c[0]), z: r2(c[1]), n: a.name }; }),
-  lines: lines.map((l) => ({ k: l.kind, p: flat(l.pts), n: l.name })),
+  lines: lines.map((l) => { const o = { k: l.kind, p: flat(l.pts), n: l.name }; if (l.w) o.w = l.w; if (l.s) o.s = l.s; return o; }),
   trees, lamps, pois,
 };
 mkdirSync(new URL('../public/maps', import.meta.url).pathname, { recursive: true });

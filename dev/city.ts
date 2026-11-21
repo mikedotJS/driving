@@ -4,6 +4,7 @@ import { RoadNet, type MapFile } from '../src/map/roadnet';
 import { MaterialLib } from '../src/render/materials';
 import { Sky } from '../src/render/sun';
 import { City } from '../src/world/city';
+import { Ortho, lireIndex, lireToits } from '../src/world/ortho';
 import { Ground } from '../src/world/ground';
 import { Props } from '../src/world/props';
 
@@ -27,11 +28,14 @@ const net = new RoadNet(map);
 const mats = new MaterialLib();
 const sky = new Sky(scene, renderer, { shadows: q.get('shadows') !== '0' });
 await Promise.all([mats.load(renderer), sky.load()]);
-const city = new City(net, mats);
+// photo aérienne du sol : ?ortho=non la coupe, ?ortho=calage la montre seule, chaussée comprise
+const ixOrtho = q.get('ortho') === 'non' ? null : await lireIndex();
+const ortho = ixOrtho ? new Ortho(ixOrtho, { mineral: mats.sidewalk, vegetal: mats.grass, pave: mats.plaza, uni: mats.uni, toit: mats.roof, chaussee: mats.road, moyennes: mats.moyennes }, { calage: q.get('ortho') === 'calage', toits: await lireToits(ixOrtho, map.buildings.length) }) : null;
+const city = new City(net, mats, ortho);
 scene.add(city.group);
 const ground = new Ground(map);
 const props = new Props(net, mats, ground, city.enseignes);
-city.decorators.push((k, g, textes) => props.populateChunk(k, g, textes));
+city.decorators.push((k, g, textes, uni) => props.populateChunk(k, g, textes, uni));
 scene.add(props.group);
 props.update(num('time', 0));
 
@@ -48,6 +52,8 @@ if (q.has('edge')) {
   }
 }
 city.ensureAround(x, z, num('r', 260));
+// la page ne rend qu'une image : on attend les dalles de photo, puis on saute leur fondu
+if (ortho) { ortho.update(x, z, num('r', 260) + 50); await ortho.pretes(); ortho.update(x, z, num('r', 260) + 50, Infinity); }
 const hr = (h * Math.PI) / 180;
 camera.position.set(x, num('y', 1.2), z);
 camera.rotation.order = 'YXZ';

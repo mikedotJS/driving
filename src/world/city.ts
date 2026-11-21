@@ -12,6 +12,8 @@ import { apparence, etages, toitEnPente, type Voisin } from './gabarit';
 import { partager, vitrine } from './devantures';
 import { Enseignes, cleCommerce, cleRepere, poseBandeau } from './enseignes';
 import { hash32, Rng } from '../core/math';
+import { POIDS, type Ortho } from './ortho';
+import { TEINTE, TONS_MURET, habillage, poserAllee, poserMarches, poserMassif, teinteAllee, type RGB as Teinte } from './sol';
 
 export const KERB_H = 0.14;
 const CM = 0.01;
@@ -32,9 +34,17 @@ const HORIZON_CELL = 500;
 const VOISIN_CELL = 40;
 const VOISIN_MAX = 20;
 const gabaritDe = (l: number) => (l <= 2 ? 0 : l <= 5 ? 1 : 2);
-// Les haies de la carte ferment surtout des massifs plantés sur les places (Croix de Chavaux) : à
-// hauteur d'homme, ces blocs verts cachaient le pied des façades, les enseignes et les bouches de métro.
-const HAIE_H = 1.1;
+// Haies taillées : une ligne fine à hauteur de poitrine. Les haies qui ferment un massif planté
+// (Croix de Chavaux) ne sont plus des murs : la carte en fait des espaces « massif », bas et pleins.
+const HAIE_H = 1.3;
+const HAIE_EP = 0.45;
+// Les espaces de la carte sont posés un peu au-dessus du trottoir qu'ils recouvrent par endroits ;
+// entre eux ils ne se recouvrent pas (la carte les a découpés), donc une seule hauteur suffit.
+const Y_ESPACE = KERB_H + 0.012;
+const Y_ALLEE = KERB_H + 0.02;
+// Plan de fond sous toute la ville : altitude et couleur (gris sombre d'un joint de bordure)
+const Y_FOND = -0.12;
+const FOND_SOL = 0x5f615f;
 // En dessous de cette longueur, un mur ne reçoit pas de travée à fenêtre : la tuile de 3,2 m y
 // serait comprimée au point de montrer des pierres et des fenêtres moitié moins larges qu'à côté.
 const MUR_ETROIT = 2.3;
@@ -51,20 +61,25 @@ export class City {
   private lastCi = 1e9; private lastCj = 1e9;
   private markings: MarkingSet;
   private bBuckets = new Map<string, RawBuilding[]>();
-  private barBuckets = new Map<string, { k: string; h: number; p: number[] }[]>();
+  private barBuckets = new Map<string, { k: string; h: number; p: number[]; c?: number }[]>();
+  /** allées et escaliers, rangés dans la dalle de leur premier point */
+  private allees = new Map<string, { k: string; p: number[]; w?: number; s?: string }[]>();
   /** murs mitoyens : hauteur du plus bas des bâtiments qui se partagent le segment */
   private shared = new Map<string, number>();
   /** bâtiments d'habitation dont l'IGN connaît le matériau, rangés par cases de VOISIN_CELL */
   private connus = new Map<string, { x: number; z: number; g: number; v: Voisin }[]>();
+  /** rang de chaque bâtiment dans la carte : c'est l'ordre des couleurs de toit relevées sur la photo */
+  private rang = new Map<RawBuilding, number>();
   readonly size: number;
   /** nombre de dalles construites */
   built = 0;
   /**
    * Compléments de décor ajoutés à chaque dalle (mobilier, voitures garées…). `textes` est le lot de
    * la dalle pour tout ce qui s'écrit avec l'atlas des enseignes : y verser ses panneaux ne coûte
-   * aucun appel de dessin de plus.
+   * aucun appel de dessin de plus. De même `uni`, le lot à couleurs par sommet sans texture (massifs,
+   * terre battue…), reçoit le petit mobilier.
    */
-  decorators: ((key: string, group: THREE.Group, textes: GeoBuilder) => void)[] = [];
+  decorators: ((key: string, group: THREE.Group, textes: GeoBuilder, uni: GeoBuilder) => void)[] = [];
   /** atlas des textes du décor (enseignes, arrêts, stations, plaques) */
   readonly enseignes: Enseignes;
   /** commerces de la carte, par bâtiment */
@@ -72,7 +87,11 @@ export class City {
   /** textes des tours et des barres, dessinées à part : ils attendent la dalle où ils se trouvent */
   private textesEnAttente = new Map<string, GeoBuilder>();
 
-  constructor(readonly net: RoadNet, readonly mats: MaterialLib) {
+  /**
+   * `ortho` : photo aérienne du sol (facultative). Les lots de sol et de toit d'une dalle prennent alors
+   * les matériaux de la dalle de photo qui la couvre ; sans elle, le sol reste procédural.
+   */
+  constructor(readonly net: RoadNet, readonly mats: MaterialLib, readonly ortho: Ortho | null = null) {
     this.size = net.map.chunk;
     this.markings = buildMarkings(net);
     mats.roof.vertexColors = true;
@@ -89,6 +108,7 @@ export class City {
     // répartition des bâtiments par dalle + repérage des murs mitoyens
     const seen = new Map<string, [number, number]>();
     const tall = new Map<string, RawBuilding[]>();
+    net.map.buildings.forEach((b, i) => this.rang.set(b, i));
     for (const b of net.map.buildings) {
       let cx = 0, cz = 0;
       const n = b.p.length / 2;
@@ -120,6 +140,25 @@ export class City {
       let l = this.barBuckets.get(key);
       if (!l) this.barBuckets.set(key, (l = []));
       l.push(b);
+    }
+    for (const l of net.map.lines) {
+      if (l.k !== 'allee' && l.k !== 'marches') continue;
+      const key = `${Math.floor(l.p[0] / C)},${Math.floor(l.p[1] / C)}`;
+      let a = this.allees.get(key);
+      if (!a) this.allees.set(key, (a = []));
+      a.push(l);
+    }
+    // Fond sous la ville : un seul plan sombre, 12 cm sous la chaussée. Entre deux polygones de sol
+    // voisins, une fente d'un pixel laissait voir le ciel (traits bleus en vue rasante) ; elle montre
+    // maintenant ce fond, de la teinte d'un joint.
+    {
+      const r = net.map.rect, marge = 50;
+      const fond = new THREE.Mesh(new THREE.PlaneGeometry(r.x1 - r.x0 + 2 * marge, r.z1 - r.z0 + 2 * marge), new THREE.MeshBasicMaterial({ color: FOND_SOL }));
+      fond.name = 'fond du sol';
+      fond.rotation.x = -Math.PI / 2;
+      fond.position.set((r.x0 + r.x1) / 2, Y_FOND, (r.z0 + r.z1) / 2);
+      fond.matrixAutoUpdate = false; fond.updateMatrix();
+      this.group.add(fond);
     }
     // silhouette lointaine : un seul maillage par case, façades et toits confondus (le toit prend la
     // tuile de béton uni), pour ne coûter qu'un appel de dessin par case en vue
@@ -180,6 +219,8 @@ export class City {
       const dx = (c.ci + 0.5) * C - x, dz = (c.cj + 0.5) * C - z;
       c.group.visible = dx * dx + dz * dz < (radius + C) * (radius + C);
     }
+    // photo du sol : chargée jusqu'aux dalles visibles les plus lointaines, libérée au-delà
+    this.ortho?.update(x, z, radius + C / 2);
     return this.pending.length;
   }
 
@@ -202,24 +243,54 @@ export class City {
       group.add(mesh);
     };
 
-    // ── chaussée et trottoirs ──
-    const road = new GeoBuilder(), walk = new GeoBuilder();
-    road.label = key + ' chaussée'; walk.label = key + ' trottoir';
+    // ── chaussée ──
+    const road = new GeoBuilder();
+    road.label = key + ' chaussée';
     for (const p of raw.r) road.polygon(p.o, p.h, 0, 1 / 3.2, ox, oz, CM);
-    for (const p of raw.w) walk.polygon(p.o, p.h, KERB_H, 1 / 2.6, ox, oz, CM);
-    add(road, m.road); add(walk, m.sidewalk);
-    // cœurs d'îlot : jardins et cours derrière les façades
-    if (raw.g) {
-      const inner = new GeoBuilder();
-      inner.label = key + ' îlots';
-      for (const p of raw.g) inner.polygon(p.o, p.h, KERB_H - 0.01, 1 / 5, ox, oz, CM);
-      add(inner, m.yard);
+    // photo aérienne : matériaux de la dalle de photo qui couvre cette dalle (null si elle n'existe pas)
+    const mo = this.ortho?.materiaux(ci, cj, C) ?? null;
+    add(road, mo?.chaussee ?? m.road);
+    // ── sol hors chaussée : un lot par matériau, teinté par sommet ──
+    // minéral (trottoirs, cours, enrobé, béton, allées), végétal (jardins, parcs, pelouses), pavés,
+    // uni (terre, sable, sol souple, massifs, haies, mobilier), eau
+    // avec la photo, chaque sommet porte son poids (attribut « photo ») : nul sur les trottoirs, le mobilier, les massifs
+    const ex = mo ? 1 : 0;
+    const mineral = new GeoBuilder(true, ex, 'photo'), vegetal = new GeoBuilder(true, ex, 'photo'), pave = new GeoBuilder(), uni = new GeoBuilder(true, ex, 'photo'), eau = new GeoBuilder();
+    mineral.label = key + ' sol minéral'; vegetal.label = key + ' sol végétal'; pave.label = key + ' pavés'; uni.label = key + ' uni'; eau.label = key + ' eau';
+    const UV_MIN = 1 / 2.6, UV_VEG = 1 / 4;
+    const lim = C / CM;
+    for (const p of raw.w) mineral.polygon(p.o, p.h, KERB_H, UV_MIN, ox, oz, CM, 1, 1, 1, POIDS.trottoir);
+    // cœurs d'îlot : cours au même niveau et dans la même matière que le trottoir, jardins en herbe
+    if (raw.c) for (const p of raw.c) mineral.polygon(p.o, p.h, KERB_H, UV_MIN, ox, oz, CM, ...TEINTE.cour, POIDS.cour);
+    if (raw.g) for (const p of raw.g) vegetal.polygon(p.o, p.h, KERB_H, UV_VEG, ox, oz, CM, ...TEINTE.jardin, POIDS.jardin);
+    if (raw.a) {
+      for (const a of raw.a) {
+        if (a.k === 'massif') { poserMassif(vegetal, uni, a.o, a.h, KERB_H, (a.e ?? 4) / 10, ox, oz, CM, lim); continue; }
+        const { lot, teinte: t } = habillage(a.k, a.s);
+        if (lot === 'mineral') mineral.polygon(a.o, a.h, Y_ESPACE, UV_MIN, ox, oz, CM, ...t, POIDS.espace);
+        else if (lot === 'vegetal') vegetal.polygon(a.o, a.h, Y_ESPACE, UV_VEG, ox, oz, CM, ...t, POIDS.espace);
+        else if (lot === 'uni') uni.polygon(a.o, a.h, Y_ESPACE, 1, ox, oz, CM, ...t, POIDS.espace);
+        else (lot === 'pave' ? pave : eau).polygon(a.o, a.h, Y_ESPACE, 1 / 3, ox, oz, CM);
+      }
     }
+    // allées des parcs et des jardins : rubans posés sur l'herbe
+    const allees = this.allees.get(key);
+    if (allees) {
+      // un lot à part, décalé en profondeur : à 2 cm de l'herbe, les rubans scintilleraient de loin
+      const ruban = new GeoBuilder(true);
+      ruban.label = key + ' allées';
+      for (const l of allees) {
+        const larg = (l.w ?? 20) / 10;
+        if (l.k === 'marches') poserMarches(ruban, l.p, larg, Y_ALLEE, UV_MIN);
+        else poserAllee(ruban, l.p, larg, Y_ALLEE, UV_MIN, teinteAllee(l.s));
+      }
+      add(ruban, m.allee);
+    }
+    add(vegetal, mo?.vegetal ?? m.grass); add(pave, mo?.pave ?? m.plaza); add(eau, m.water);
 
     // ── bordures et caniveaux ──
     const kerb = new GeoBuilder(), gutter = new GeoBuilder();
     kerb.label = key + ' bordure'; gutter.label = key + ' caniveau';
-    const lim = C / CM;
     const ring = (r: number[], isHole: boolean) => {
       const n = r.length / 2;
       let area = 0;
@@ -262,19 +333,6 @@ export class City {
     const mk = this.markings.white.get(key);
     if (mk) { mk.label = key + ' marquage'; add(mk, m.paint); }
 
-    // ── espaces verts, places ──
-    if (raw.a) {
-      const byMat = new Map<THREE.Material, GeoBuilder>();
-      let layer = 0;
-      for (const a of raw.a as (RawPoly & { k: string })[]) {
-        const mat = a.k === 'water' ? m.water : a.k === 'plaza' ? m.plaza : a.k === 'parking' ? m.road : a.k === 'dirt' ? m.dirt : m.grass;
-        let g = byMat.get(mat);
-        if (!g) byMat.set(mat, (g = new GeoBuilder()));
-        g.polygon(a.o, a.h, KERB_H + 0.012 + (layer++ % 4) * 0.002, mat === m.grass ? 1 / 4 : 1 / 3, ox, oz, CM);
-      }
-      for (const [mat, g] of byMat) add(g, mat);
-    }
-
     // ── bâtiments ──
     // enseignes, plaques, noms d'arrêts : un seul lot par dalle, sur l'atlas commun
     const textes = this.textesEnAttente.get(key) ?? new GeoBuilder();
@@ -291,19 +349,31 @@ export class City {
     // ── murs, clôtures, haies ──
     const bars = this.barBuckets.get(key);
     if (bars) {
-      const wall = new GeoBuilder(), fence = new GeoBuilder(), hedge = new GeoBuilder();
-      wall.label = key + ' murs'; fence.label = key + ' clôtures'; hedge.label = key + ' haies';
+      const wall = new GeoBuilder(), fence = new GeoBuilder();
+      wall.label = key + ' murs'; fence.label = key + ' clôtures';
       for (const b of bars) {
-        const g = b.k === 'hedge' ? hedge : b.k === 'wall' ? wall : fence;
-        const t = b.k === 'hedge' ? 0.7 : b.k === 'wall' ? 0.24 : 0.05;
-        const h = b.k === 'hedge' ? Math.min(b.h, HAIE_H) : b.h;
-        for (let i = 0; i + 3 < b.p.length; i += 2) boxWall(g, b.p[i], b.p[i + 1], b.p[i + 2], b.p[i + 3], KERB_H, KERB_H + h, t);
+        // contour d'un massif : obstacle pour les collisions (Ground), dessiné comme un espace plein
+        if (b.k === 'massif') continue;
+        // muret de clôture d'un jardin sur rue : dans le lot minéral (texture du trottoir, teintée), sans appel de dessin de plus
+        if (b.k === 'muret') {
+          const ton = TONS_MURET[(b.c ?? 0) % TONS_MURET.length];
+          for (let i = 0; i + 3 < b.p.length; i += 2) boxWall(mineral, b.p[i], b.p[i + 1], b.p[i + 2], b.p[i + 3], KERB_H, KERB_H + b.h, 0.2, ton);
+          continue;
+        }
+        const haie = b.k === 'hedge';
+        const g = haie ? uni : b.k === 'wall' ? wall : fence;
+        const t = haie ? HAIE_EP : b.k === 'wall' ? 0.24 : 0.05;
+        const h = haie ? Math.min(b.h, HAIE_H) : b.h;
+        for (let i = 0; i + 3 < b.p.length; i += 2) boxWall(g, b.p[i], b.p[i + 1], b.p[i + 2], b.p[i + 3], KERB_H, KERB_H + h, t, haie ? TEINTE.haie : undefined);
       }
       // un grillage ne porte pas d'ombre pleine
-      add(wall, m.wall, true); add(fence, m.fence, false); add(hedge, m.hedge, true);
+      add(wall, m.wall, true); add(fence, m.fence, false);
     }
 
-    for (const d of this.decorators) d(key, group, textes);
+    for (const d of this.decorators) d(key, group, textes, uni);
+    // le lot minéral est ajouté ici : les murets de clôture viennent d'y être versés
+    add(mineral, mo?.mineral ?? m.sidewalk);
+    add(uni, mo?.uni ?? m.uni);
     // sans ombre portée : un panneau plaqué au mur n'en projette pas de visible, et la passe d'ombre
     // redessine chaque lot jusqu'à trois fois
     add(textes, this.enseignes.material);
@@ -347,7 +417,10 @@ export class City {
     const look = apparence(b, Math.abs(area) / 2, rng.next(), this.voisin(b, cx, cz));
     const style = look.style;
     const tint = lin(hex(rng.pick(look.murs)));
-    const roofTint = lin(hex(rng.pick(look.toit)));
+    let roofTint = lin(hex(rng.pick(look.toit)));
+    // couleur du toit relevée sur la photo aérienne ; la silhouette lointaine (autre texture) garde la sienne
+    const vu = roofs !== g ? this.ortho?.teinteToit(this.rang.get(b) ?? -1) : undefined;
+    if (vu) roofTint = vu;
     const F = this.mats.facades;
     const top = KERB_H + b.h;
     const open = b.t === 'roof';
@@ -362,7 +435,7 @@ export class City {
     const pans = look.pente > 0 ? toitEnPente(p, look.pente, look.faitage, look.largeurMax, look.monument) : null;
     if (pans) {
       // la texture de couverture est sombre : sans ce coup de clair, la tuile en pente vire au brun
-      for (let i = 0; i < 3; i++) roofTint[i] *= 1.7;
+      if (!vu) for (let i = 0; i < 3; i++) roofTint[i] *= 1.7;
       // la hauteur de la carte est celle de l'égout : le faîtage monte au-dessus
       const [ax, az] = pans.axe;
       for (const f of pans.versants) {
@@ -657,18 +730,18 @@ function orient(g: GeoBuilder, a: number, b: number, c: number, d: number, nx: n
 }
 
 /** Mur épais (deux faces + dessus) entre deux points. */
-function boxWall(g: GeoBuilder, x0: number, z0: number, x1: number, z1: number, yb: number, yt: number, t: number) {
+function boxWall(g: GeoBuilder, x0: number, z0: number, x1: number, z1: number, yb: number, yt: number, t: number, col: Teinte = [1, 1, 1]) {
   const dx = x1 - x0, dz = z1 - z0, l = Math.hypot(dx, dz);
   if (l < 0.05) return;
   const nx = -dz / l, nz = dx / l, h = t / 2;
   const us = l / 2.5, vs = (yt - yb) / 2.5;
   for (const s of [1, -1]) {
     const ox = nx * h * s, oz = nz * h * s;
-    const a = g.vertex(x0 + ox, yb, z0 + oz, nx * s, 0, nz * s, 0, 0), b = g.vertex(x1 + ox, yb, z1 + oz, nx * s, 0, nz * s, us, 0);
-    const c = g.vertex(x1 + ox, yt, z1 + oz, nx * s, 0, nz * s, us, vs), d = g.vertex(x0 + ox, yt, z0 + oz, nx * s, 0, nz * s, 0, vs);
+    const a = g.vertex(x0 + ox, yb, z0 + oz, nx * s, 0, nz * s, 0, 0, col[0] * 0.85, col[1] * 0.85, col[2] * 0.85), b = g.vertex(x1 + ox, yb, z1 + oz, nx * s, 0, nz * s, us, 0, col[0] * 0.85, col[1] * 0.85, col[2] * 0.85);
+    const c = g.vertex(x1 + ox, yt, z1 + oz, nx * s, 0, nz * s, us, vs, col[0] * 0.85, col[1] * 0.85, col[2] * 0.85), d = g.vertex(x0 + ox, yt, z0 + oz, nx * s, 0, nz * s, 0, vs, col[0] * 0.85, col[1] * 0.85, col[2] * 0.85);
     orient(g, a, b, c, d, nx * s, 0, nz * s);
   }
-  const a = g.vertex(x0 + nx * h, yt, z0 + nz * h, 0, 1, 0, 0, 0), b = g.vertex(x1 + nx * h, yt, z1 + nz * h, 0, 1, 0, us, 0);
-  const c = g.vertex(x1 - nx * h, yt, z1 - nz * h, 0, 1, 0, us, 0.1), d = g.vertex(x0 - nx * h, yt, z0 - nz * h, 0, 1, 0, 0, 0.1);
+  const a = g.vertex(x0 + nx * h, yt, z0 + nz * h, 0, 1, 0, 0, 0, col[0], col[1], col[2]), b = g.vertex(x1 + nx * h, yt, z1 + nz * h, 0, 1, 0, us, 0, col[0], col[1], col[2]);
+  const c = g.vertex(x1 - nx * h, yt, z1 - nz * h, 0, 1, 0, us, 0.1, col[0], col[1], col[2]), d = g.vertex(x0 - nx * h, yt, z0 - nz * h, 0, 1, 0, 0, 0.1, col[0], col[1], col[2]);
   orient(g, a, b, c, d, 0, 1, 0);
 }

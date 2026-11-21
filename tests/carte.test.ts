@@ -4,6 +4,11 @@
 //    (tools/essais) ont été validés sur cette chaussée. Les empreintes ci-dessous sont celles de la
 //    carte d'avant l'ajout des données IGN et des enseignes. Si l'on modifie VOLONTAIREMENT la
 //    voirie, il faut rejouer ces trajets, puis mettre les empreintes à jour.
+//    Le sol hors chaussée (cœurs d'îlot, espaces), les allées, les arbres, les haies et le mobilier
+//    ne sont pas figés ici : ils suivent OpenStreetMap et la photo aérienne (tests/sol.test.ts les
+//    vérifie). Dans les dalles, seuls la chaussée (r) et le trottoir (w) sont du réseau. Les rues
+//    piétonnes, les voies de tram, les murs et clôtures relevés et les points fixes (arrêts, bouches de
+//    métro, commerces) sont figés aussi : leurs empreintes sont celles de la carte de référence.
 // 2. Les commerces rattachés à une façade doivent désigner un mur qui existe.
 
 import { describe, it, expect } from 'vitest';
@@ -23,13 +28,11 @@ const EMPREINTES: Record<string, string> = {
   vertices: '13345fefead8031193fadb0336fd2bbb874d2de044d73b7d206742f69e4122e2',
   edges: 'b5187e6b348368e0d553adbf4492b579c4b1888009d5213fbed3c3c743f709e9',
   restrictions: 'c8e45076ad69ed01c094f7d2c5c7ca0bcbd320b080d7590954df7195502e5343',
-  chunks: '60787b9ef8056c7df38c56a252397e1ddc984da5addd51b331c11beaba3aca48',
-  lines: 'e3c21d36574e7f79f8c4da2d756d7131147cd4988a259ed4b593341e136f4aa1',
-  areas: 'cdefe9af1dde5a57a69519b2fbd0b93ffaaff5d7fc8d9a5a17bff6df04a67923',
-  trees: 'aeea5021806b4d1531fc7433d39b1e8ca1cd8fbe784a1052a64478099a3c03f7',
   lamps: 'ba45afae1d2b67e0d5bd9dcf03d6738110a8c4b18b7f2187c82521536c0c7b76',
-  barriers: '22a003ca1c3df52933ba477c1d5954ecb0edc835fbd74722a6ef66f3e6d3ddf2',
 };
+// chaussée et trottoir de chaque dalle, dans l'ordre des dalles : empreinte calculée sur la carte de
+// référence (celle dont l'empreinte de « chunks » entier était 60787b9e…)
+const EMPREINTE_VOIRIE = 'edfba77e89ee48c700b59624d660e43532a4a358e32e932f5ffb4ef9dad9ec52';
 
 describe('carte : réseau routier inchangé', () => {
   for (const [cle, attendu] of Object.entries(EMPREINTES)) {
@@ -37,6 +40,30 @@ describe('carte : réseau routier inchangé', () => {
       expect(sha((map as unknown as Record<string, unknown>)[cle])).toBe(attendu);
     });
   }
+
+  it('garde la chaussée et le trottoir de chaque dalle identiques à la carte de référence', () => {
+    expect(Object.keys(map.chunks).length).toBe(640);
+    expect(sha(Object.keys(map.chunks).map((k) => [k, map.chunks[k].r, map.chunks[k].w]))).toBe(EMPREINTE_VOIRIE);
+  });
+
+  it('garde les arrêts de bus, les bouches de métro et les commerces à leur place', () => {
+    const fixes = map.pois.filter((p) => /^(bus|metro|shop|pharmacy)$/.test(p.k));
+    expect(fixes.length).toBe(1152);
+    expect(sha(fixes)).toBe('193c69c4111c5211b925cc6777a3d91ad9b166fe244f1436e34316a1debf0042');
+  });
+
+  it('garde les rues piétonnes et les voies de tram (elles portent des devantures)', () => {
+    expect(sha(map.lines.filter((l) => l.k === 'ped' || l.k === 'tram'))).toBe('e3c21d36574e7f79f8c4da2d756d7131147cd4988a259ed4b593341e136f4aa1');
+  });
+
+  it('garde les murs, clôtures et glissières relevés (obstacles des collisions) ; les barrières déduites portent d: 1', () => {
+    const releves = map.barriers.filter((b) => !b.d && /^(wall|fence|rail)$/.test(b.k));
+    expect(releves.length).toBe(1193);
+    expect(sha(releves)).toBe('1eb669de9475fd4f5dd2d7bed6c09b49c87aa01f5a52471c37a3056cf34b3d13');
+    // tout ce qui est déduit est une clôture de jardin : muret ou haie
+    for (const b of map.barriers.filter((q) => q.d)) expect(b.k === 'muret' || b.k === 'hedge').toBe(true);
+    expect(map.barriers.filter((q) => q.k === 'muret').every((q) => q.d === 1)).toBe(true);
+  });
 
   it('garde le même nombre de bâtiments (leurs murs servent aux collisions)', () => {
     expect(map.buildings.length).toBe(12266);

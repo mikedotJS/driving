@@ -40,6 +40,25 @@ function addMacroVariation(mat: THREE.MeshStandardMaterial, strength = 0.55) {
   mat.customProgramCacheKey = () => 'macro' + strength;
 }
 
+/** Couleur moyenne (linéaire) d'une texture de couleur : la photo aérienne s'en sert pour extraire le relief du sol. */
+function couleurMoyenne(t: THREE.Texture | null): THREE.Color {
+  const c = new THREE.Color(1, 1, 1);
+  const img = t?.image as CanvasImageSource | undefined;
+  if (!img) return c;
+  try {
+    const N = 16;
+    const cv = document.createElement('canvas'); cv.width = cv.height = N;
+    const ctx = cv.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(img, 0, 0, N, N);
+    const d = ctx.getImageData(0, 0, N, N).data;
+    let r = 0, g = 0, b = 0;
+    const lin = (v: number) => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); };
+    for (let i = 0; i < d.length; i += 4) { r += lin(d[i]); g += lin(d[i + 1]); b += lin(d[i + 2]); }
+    c.setRGB(r / (N * N), g / (N * N), b / (N * N));
+  } catch { /* canevas indisponible : on garde le blanc */ }
+  return c;
+}
+
 /** Peinture routière usée : blanc cassé, bords légèrement grignotés (alphaTest). */
 function paintTexture(): THREE.CanvasTexture {
   const S = 256;
@@ -81,21 +100,24 @@ export class MaterialLib {
   road!: THREE.MeshStandardMaterial;
   roadSett!: THREE.MeshStandardMaterial;
   sidewalk!: THREE.MeshStandardMaterial;
+  /** allées posées sur l'herbe : la matière du trottoir, décalée en profondeur pour ne pas scintiller */
+  allee!: THREE.MeshStandardMaterial;
   kerb!: THREE.MeshStandardMaterial;
   gutter!: THREE.MeshStandardMaterial;
   paint!: THREE.MeshStandardMaterial;
   paintYellow!: THREE.MeshStandardMaterial;
   grass!: THREE.MeshStandardMaterial;
-  yard!: THREE.MeshStandardMaterial;
   plaza!: THREE.MeshStandardMaterial;
-  dirt!: THREE.MeshStandardMaterial;
+  /** couleur par sommet, sans texture : terre, sable, massifs, haies, petit mobilier */
+  uni = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, metalness: 0, vertexColors: true });
   roof!: THREE.MeshStandardMaterial;
   wall!: THREE.MeshStandardMaterial;
-  hedge!: THREE.MeshStandardMaterial;
   fence!: THREE.MeshStandardMaterial;
   water!: THREE.MeshStandardMaterial;
   facade!: THREE.MeshStandardMaterial;
   facades!: FacadeSet;
+  /** couleur moyenne (linéaire) des textures de sol et de toit, pour le mélange avec la photo aérienne */
+  moyennes = { mineral: new THREE.Color(1, 1, 1), vegetal: new THREE.Color(1, 1, 1), pave: new THREE.Color(1, 1, 1), toit: new THREE.Color(1, 1, 1) };
   metalDark = new THREE.MeshStandardMaterial({ color: 0x24282b, roughness: 0.55, metalness: 0.6 });
   metalGrey = new THREE.MeshStandardMaterial({ color: 0x8a8f93, roughness: 0.45, metalness: 0.8 });
   metalGreen = new THREE.MeshStandardMaterial({ color: 0x1f3b2c, roughness: 0.5, metalness: 0.5 });
@@ -107,9 +129,10 @@ export class MaterialLib {
     const [road, sett, sidewalk, kerb, grass, roof, wallM, facades] = await Promise.all([
       pbr('asphalt_02', aniso, { color: new THREE.Color(1.5, 1.5, 1.52) }, 0.9),
       pbr('cobblestone_floor_08', aniso, { color: new THREE.Color(1.05, 1.03, 1.0) }, 1.2),
-      pbr('asphalt_04', aniso, { color: new THREE.Color(0.86, 0.85, 0.83) }, 0.6),
+      // trottoirs et sol minéral, herbe : teintés par sommet (cours, enrobé, béton ; jardins, bois, gazon)
+      pbr('asphalt_04', aniso, { color: new THREE.Color(0.86, 0.85, 0.83), vertexColors: true }, 0.6),
       pbr('granite_tile', aniso, { color: new THREE.Color(1.25, 1.24, 1.22) }, 0.5),
-      pbr('leafy_grass', aniso, { color: new THREE.Color(0.62, 0.95, 0.5) }, 1.0),
+      pbr('leafy_grass', aniso, { color: new THREE.Color(0.62, 0.95, 0.5), vertexColors: true }, 1.0),
       pbr('grey_roof_01', aniso, { color: new THREE.Color(0.8, 0.83, 0.87) }, 0.8),
       pbr('plastered_stone_wall', aniso, { color: new THREE.Color(1.0, 0.98, 0.94) }, 0.8),
       buildFacades(),
@@ -117,11 +140,13 @@ export class MaterialLib {
     this.road = road; addMacroVariation(road, 0.5);
     this.roadSett = sett; addMacroVariation(sett, 0.3);
     this.sidewalk = sidewalk; addMacroVariation(sidewalk, 0.45);
+    this.allee = new THREE.MeshStandardMaterial({
+      map: sidewalk.map, normalMap: sidewalk.normalMap, roughnessMap: sidewalk.roughnessMap, aoMap: sidewalk.aoMap, color: sidewalk.color, roughness: 1, metalness: 0,
+      normalScale: sidewalk.normalScale, vertexColors: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    });
+    addMacroVariation(this.allee, 0.45);
     this.kerb = kerb;
     this.grass = grass; addMacroVariation(grass, 0.5);
-    // cœurs d'îlot : herbe plus terne, mêlée de terre
-    this.yard = new THREE.MeshStandardMaterial({ map: grass.map, normalMap: grass.normalMap, roughnessMap: grass.roughnessMap, color: new THREE.Color(0.62, 0.72, 0.5), roughness: 1, metalness: 0 });
-    addMacroVariation(this.yard, 0.75);
     this.roof = roof;
     this.wall = wallM;
     this.facades = facades;
@@ -135,14 +160,12 @@ export class MaterialLib {
     this.paintYellow = this.paint.clone();
     this.paintYellow.color.set(0xf2c230);
     this.plaza = new THREE.MeshStandardMaterial({ map: sett.map, normalMap: sett.normalMap, roughnessMap: sett.roughnessMap, color: new THREE.Color(1.25, 1.22, 1.15), roughness: 1, metalness: 0 });
-    this.dirt = new THREE.MeshStandardMaterial({ color: 0x8d7b62, roughness: 1, metalness: 0 });
-    // vert de troène au soleil : plus sombre, les haies à l'ombre viraient au noir
-    this.hedge = new THREE.MeshStandardMaterial({ color: 0x55783f, roughness: 1, metalness: 0 });
     // Grillages et clôtures à barreaux : on voit au travers. En panneau plein vert sombre, ils dressaient
     // des blocs noirs le long des trottoirs et devant les places (Croix de Chavaux, mairie).
     this.fence = new THREE.MeshStandardMaterial({ color: 0x3f4d45, roughness: 0.6, metalness: 0.5, transparent: true, opacity: 0.45, depthWrite: false });
     this.water = new THREE.MeshStandardMaterial({ color: 0x3a5d6e, roughness: 0.08, metalness: 0.2 });
     this.facade = this.makeFacadeMaterial();
+    this.moyennes = { mineral: couleurMoyenne(sidewalk.map), vegetal: couleurMoyenne(grass.map), pave: couleurMoyenne(sett.map), toit: couleurMoyenne(roof.map) };
   }
 
   private makeFacadeMaterial(): THREE.MeshStandardMaterial {

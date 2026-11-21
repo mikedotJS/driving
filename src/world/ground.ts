@@ -32,7 +32,8 @@ export class Ground {
       }
     }
     for (const b of map.barriers) {
-      const kind = b.k === 'wall' ? 'wall' : b.k === 'hedge' ? 'hedge' : 'fence';
+      // le contour d'un massif planté arrête une voiture comme une haie
+      const kind = b.k === 'wall' || b.k === 'muret' ? 'wall' : b.k === 'hedge' || b.k === 'massif' ? 'hedge' : 'fence';
       for (let i = 0; i + 3 < b.p.length; i += 2) this.addSeg({ x0: b.p[i], z0: b.p[i + 1], x1: b.p[i + 2], z1: b.p[i + 3], kind });
     }
   }

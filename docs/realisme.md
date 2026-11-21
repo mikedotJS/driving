@@ -203,8 +203,9 @@ La simulation elle-même (physique à 1 kHz, circulation, règles) coûte 0,18 m
 
 ## 6. Le décor : ce qui est réel, ce qui est dessiné
 
-Le jeu ne contient aucune photo ni aucun modèle 3D d'un immeuble réel. Il assemble des données
-ouvertes, puis dessine le reste.
+Le jeu ne contient aucun modèle 3D ni aucune photo de façade d'un immeuble réel. Il assemble des
+données ouvertes, puis dessine le reste. Une seule photo y entre : la photo aérienne de l'IGN, qui
+teinte le sol hors chaussée et les toits et dit où sont les jardins et les arbres.
 
 | Élément | Source | Ce qui est réel | Ce qui est dessiné par le programme |
 |---|---|---|---|
@@ -218,6 +219,75 @@ ouvertes, puis dessine le reste.
 | Métro, bus | OpenStreetMap | position des 30 bouches et des 140 arrêts, nom de la station, ligne, lignes de bus, présence d'un abri | orientation (d'après la rue la plus proche), forme du totem, de l'abri et de l'escalier |
 | Édifices nommés | OpenStreetMap | nom de 131 bâtiments (Hôtel de Ville, églises, théâtre, tours, résidences) | la plaque et son emplacement ; un clocher générique sur les églises et chapelles, un beffroi générique sur l'hôtel de ville ; aucun modèle propre |
 | Plaques de rue | OpenStreetMap | nom de la rue | modèle de plaque (émail parisien à cartouche d'arrondissement dans le 20ᵉ, plaque bleue simple à Montreuil) |
+| Places, parcs, terrains, parkings, massifs | OpenStreetMap | contour de 593 espaces et revêtement quand il est saisi (pavés, béton, enrobé, gazon, sol souple) | la matière ; les arbustes semés sur les massifs |
+| Jardins et cours des cœurs d'îlot | IGN – BD ORTHO | où le sol est vert : part de végétation relevée sur la photo par cases de 4 m (104 ha de jardins, 268 ha de cours, bâti compris) | la limite, simplifiée à 3 m près ; la bande à moins de 6 m de la chaussée reste du trottoir, sauf devant un jardin |
+| Arbres | OpenStreetMap, IGN – BD ORTHO | position de 2 824 arbres d'alignement (OpenStreetMap) ; position et largeur de houppier de 5 407 arbres relevés sur la photo | espèce des arbres de la photo, hauteur (déduite du houppier), forme ; leur nombre, plafonné à 10 par dalle de 100 m (16 439 houppiers relevés) |
+| Clôtures des pavillons, jardins de devant | — | — | **tout** : 1 568 parcelles sur rue (12 km de murets, 7 km de haies, un portail par parcelle), posées à 3 m de la bordure là où la photo montre un jardin |
+| Couleur du sol et des toits | IGN – BD ORTHO | couleur moyenne du toit de chaque bâtiment ; couleur des jardins, parcs et pelouses (photo à 50 cm) ; teinte moyenne sur 8 m des cours et places en béton | le relief (herbe, béton), les pavés des places, toute la chaussée et les trottoirs |
+
+### Le sol, les arbres et la photo aérienne
+
+La photo est la BD ORTHO de l'IGN, prise le 27 août 2024, téléchargée à 20 cm et livrée à 50 cm
+(40 dalles de 400 m, 1,9 Mo). Elle sert à trois choses.
+
+**Dire où sont les jardins et les arbres** (`tools/prepare-ortho.py`, puis `tools/build-map.mjs`).
+Un pixel est de la végétation quand il est vert ; c'est un houppier quand il est en plus sombre et de
+texture marquée (une pelouse est claire et lisse). Sur la carte livrée : 22,2 % du sol non bâti est de la
+végétation, 13,3 % des houppiers ; 16 439 houppiers sont relevés hors des arbres déjà cartographiés,
+dont 5 407 sont plantés (10 au plus par dalle de 100 m, les plus larges et les plus proches d'une rue
+d'abord ; 70 écartés parce qu'ils tombent sur la chaussée ou à moins de 1,5 m, 394 sur un terrain de
+sport ou un bassin). La Croix de Chavaux, qui n'avait que 2 arbres à 110 m à la ronde, en a 24.
+Les seuils de couleur sont réglés à l'œil sur trois secteurs (Croix de Chavaux, parc des Guilands,
+un quartier de pavillons) ; **le taux d'erreur n'est pas mesuré** : une friche à hautes herbes peut
+recevoir des arbres, un arbre à l'ombre d'un immeuble peut manquer.
+
+**Fermer les rues de pavillons.** Devant un jardin, la carte pose une clôture à 3 m de la bordure et un
+jardin de devant derrière elle ; avant cela, la maison était posée sur 6 m de trottoir nu. Rien de cela
+n'est relevé : la place de la clôture, son genre (muret, haie, les deux) et la largeur des parcelles
+(9 à 17 m) sont tirés au sort, de façon reproductible. Les clôtures qui traverseraient un bâtiment à
+l'alignement sont écartées (294 parcelles). Les 1 193 murs et clôtures relevés dans OpenStreetMap ne
+changent pas.
+
+**Teinter le sol et les toits** (`src/world/ortho.ts`). La photo n'est pas posée telle quelle :
+
+- jardins, parcs, pelouses : la photo, nette au-delà de 28 m, réduite à une teinte moyenne sur 4 m à
+  moins de 5 m (à 50 cm par pixel, de près, elle n'est qu'une bouillie) ; ce qui y est clair et gris
+  (allée, béton, voiture) est écarté et laisse l'herbe procédurale ;
+- cours, parkings, places en béton, aires de jeux : seulement sa teinte moyenne sur 8 m, pour 60 % au
+  plus. Nette, elle y plaquait des voitures, des ombres et des houppiers aplatis ;
+- places pavées, chaussée, trottoirs : pas de photo ;
+- toits : la couleur moyenne relevée sur l'emprise du bâtiment, pas la photo.
+
+La photo est calée sur les bâtiments à moins d'un mètre (mesure de l'auteur de l'outil sur 8
+carrefours, par corrélation des contours : écart moyen 0,1 m, pire cas 0,9 m ; non refaite ici). La
+chaussée du jeu, elle, vient d'OpenStreetMap et peut s'écarter de celle de la photo : de 3 à 5 m à la
+Croix de Chavaux (estimation sur capture), réaménagée depuis la prise de vue. C'est pour cela que les
+places qui bordent la route ne reçoivent plus la photo nette.
+
+Coût, mesuré avec `tools/essais/budget.cjs` (Chromium sans carte graphique, 640 × 360, qualité
+moyenne, somme des 6 images du cycle d'ombres, décor seul) entre la version d'avant ces ajouts et la
+version livrée :
+
+| Point de vue | Appels de dessin | Triangles |
+|---|---|---|
+| Croix de Chavaux, au sol | 3 059 → 3 168 (+3,6 %) | 17 028 k → 17 268 k (+1,4 %) |
+| Croix de Chavaux, de 80 m | 2 542 → 2 667 (+4,9 %) | 12 661 k → 12 947 k (+2,3 %) |
+| Église Saint-Pierre-Saint-Paul, de 60 m | 2 109 → 2 263 (+7,3 %) | 9 089 k → 9 367 k (+3,1 %) |
+| Mairie, au sol | 2 554 → 2 662 (+4,2 %) | 9 626 k → 9 993 k (+3,8 %) |
+| Parc des Guilands, au sol | 1 594 → 1 607 (+0,8 %) | 4 596 k → 4 929 k (+7,2 %) |
+| Quartier de pavillons, au sol | 2 776 → 2 854 (+2,8 %) | 14 878 k → 15 217 k (+2,3 %) |
+
+Les troncs sont versés dans un lot déjà dessiné et les houppiers regroupés par blocs de 2 × 2 dalles :
+sans cela, les arbres de la photo ajoutaient un appel de dessin par dalle (+10,1 % devant l'église).
+La photo ajoute une lecture de texture par fragment de sol et 7 à 9 textures de 800 × 800 px (24 à
+31 Mo de mémoire graphique en qualité moyenne, calculé) ; la carte passe de 3,61 à 4,43 Mo (1,07 à
+1,30 Mo compressée). **Non mesuré** : la cadence d'images sur une vraie carte graphique avec ces
+ajouts.
+
+Limites : un bois n'a que dix arbres par dalle de 100 m ; les arbres de la photo n'ont pas d'espèce ;
+les ombres de la prise de vue sont atténuées, pas supprimées, et le relief du sol reste celui du
+matériau choisi par la carte (herbe sur la piste d'athlétisme des Guilands, dont OpenStreetMap trace
+en plus le chemin de ceinture quelques mètres à côté de la piste photographiée).
 
 ### Les enseignes
 
@@ -271,8 +341,10 @@ ajouts ; la mesure de la section 5 date d'avant.
 - Rues, emprises, noms des commerces, des arrêts et des stations : © les contributeurs
   d'OpenStreetMap, licence ODbL.
 - Hauteurs, étages, matériaux et dates des bâtiments : IGN – BD TOPO, Licence Ouverte Etalab 2.0.
+- Photographies aériennes (teinte du sol et des toits, relevé des jardins et des arbres) : IGN – BD
+  ORTHO, prise de vue du 27 août 2024, Licence Ouverte Etalab 2.0.
 
-Les deux mentions figurent dans la carte (`attribution`), dans le menu du jeu et dans le README.
+Les trois mentions figurent dans la carte (`attribution`), dans le menu du jeu et dans le README.
 
 ## 7. Captures
 
@@ -280,9 +352,9 @@ Les deux mentions figurent dans la carte (`attribution`), dans le menu du jeu et
 ![Rue de Paris vue du poste de conduite](captures/rues-vue-conducteur-rue-de-paris.jpg)
 ![Bouche de métro Croix de Chavaux, ligne 9](captures/rues-metro-croix-de-chavaux.jpg)
 ![Arrêt de bus Croix de Chavaux – Rouget de Lisle et son abri](captures/rues-arret-de-bus.jpg)
-![Hôtel de Ville de Montreuil : hauteur IGN et plaque à son nom (la façade reste générique)](captures/rues-hotel-de-ville.jpg)
+![Hôtel de Ville de Montreuil et place Jean Jaurès : hauteur IGN, plaque à son nom (la façade reste générique), arbres relevés sur la photo aérienne](captures/rues-hotel-de-ville.jpg)
 ![Pavillons de brique et de meulière, toits de tuiles, tours à l'horizon](captures/batiments-pavillons-toits-et-tours.jpg)
-![Croix de Chavaux](captures/batiments-croix-de-chavaux.jpg)
+![Croix de Chavaux, place Jacques Duclos : pavés, massifs et arbres](captures/batiments-croix-de-chavaux.jpg)
 ![Rue Robespierre](captures/batiments-rue-robespierre.jpg)
 
 ![Habitacle, cyclistes devant](captures/habitacle-cyclistes.jpg)

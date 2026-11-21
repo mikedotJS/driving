@@ -39,24 +39,37 @@ export interface MapFile {
   vertices: RawVertex[];
   edges: RawEdge[];
   restrictions: { kind: string; from: number; via: number; to: number }[];
-  /** par dalle : chaussée (r), trottoirs (w), cœurs d'îlot (g), espaces verts et places (a) */
-  chunks: Record<string, { r: RawPoly[]; w: RawPoly[]; g?: RawPoly[]; a?: (RawPoly & { k: string })[] }>;
+  /**
+   * par dalle : chaussée (r), trottoirs (w), cœurs d'îlot en herbe (g, jardins) ou minéraux (c, cours),
+   * espaces (a) : parcs, places, terrains, massifs… Les espaces d'une dalle ne se recouvrent pas, et
+   * les cœurs d'îlot en sont déjà amputés. Pour un espace : k nature, s revêtement relevé (a enrobé,
+   * b béton, p pavés, t sol souple, s sable, g gazon, c stabilisé, r terre), e hauteur d'un massif (dm).
+   */
+  chunks: Record<string, { r: RawPoly[]; w: RawPoly[]; g?: RawPoly[]; c?: RawPoly[]; a?: (RawPoly & { k: string; s?: string; e?: number })[] }>;
   buildings: RawBuilding[];
-  barriers: { k: string; h: number; p: number[] }[];
+  /**
+   * k : wall, fence, hedge, rail, massif (contour d'un massif planté), muret (clôture basse d'un jardin
+   * sur rue, c indice de sa teinte). d: 1 quand la barrière est déduite (clôtures des jardins de devant)
+   * et non relevée dans OpenStreetMap.
+   */
+  barriers: { k: string; h: number; p: number[]; c?: number; d?: number }[];
   areas: { k: string; x: number; z: number; n: string }[];
-  lines: { k: string; p: number[]; n?: string }[];
-  trees: [number, number, number, number, string][];
+  /** k : ped (rue piétonne), tram, allee, marches (allées et escaliers dans l'herbe : w largeur en dm, s revêtement) */
+  lines: { k: string; p: number[]; n?: string; w?: number; s?: string }[];
+  /** x, z, hauteur (m, 0 = inconnue), circonférence du tronc (cm, 0 = inconnue), genre ; 6e champ à 1 : arbre relevé sur la photo aérienne */
+  trees: [number, number, number, number, string, number?][];
   lamps: [number, number][];
   /**
    * Points d'intérêt OpenStreetMap. k : shop, pharmacy, bus, metro, velib… ; n : nom ; t : type de
    * commerce ; b : enseigne de chaîne si elle diffère du nom ; sh : arrêt de bus abrité ; r : lignes de
    * bus (« 102;115 »). Métro : n est la station, s le nom de la sortie, l la ligne.
+   * Mobilier (bench, bin, bikepark…) : c capacité (arceaux, Vélib'), d cap vers lequel regarde un banc.
    * Commerces rattachés à une façade : fb indice du bâtiment, fi indice du mur (du sommet fi au
    * suivant), f0 et f1 portion du mur qui porte la devanture (m depuis le sommet fi).
    */
   pois: {
     k: string; x: number; z: number; n?: string; t?: string; b?: string; sh?: number; r?: string; s?: string; l?: string;
-    fb?: number; fi?: number; f0?: number; f1?: number;
+    fb?: number; fi?: number; f0?: number; f1?: number; c?: number; d?: number;
   }[];
 }
 

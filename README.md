@@ -117,6 +117,17 @@ citadine réelle, volant émulé, fluidité mesurée sur une carte graphique ré
 - Plan des rues, sens uniques, limitations, feux, stops, passages piétons, bâtiments, arbres et
   espaces verts issus d'**OpenStreetMap** : 85 km de voirie, 491 carrefours dont 354 en priorité à
   droite, 1 098 passages piétons, 12 266 bâtiments.
+- **Le sol hors chaussée d'après OpenStreetMap et la photo aérienne** (BD ORTHO de l'IGN, août 2024) :
+  places, parcs, terrains, parkings et massifs viennent d'OpenStreetMap, avec leur revêtement ; les
+  jardins sont là où la photo montre de la végétation (104 ha de jardins, 268 ha de cours). Jardins,
+  parcs et pelouses prennent la couleur de la photo ; cours et places en béton n'en gardent qu'une
+  teinte moyenne sur 8 m, les places pavées restent procédurales ; chaque toit prend la couleur relevée
+  sur son bâtiment. La photo est coupée en qualité basse.
+- **8 231 arbres** : les 2 824 arbres d'alignement d'OpenStreetMap, et 5 407 arbres plantés là où la
+  photo montre un houppier (squares, places, jardins, bois), dix au plus par dalle de 100 m.
+- **Des rues de pavillons fermées sur la rue** : devant un jardin, le trottoir est ramené à 3 m, puis
+  viennent une clôture (muret, haie) coupée d'un portail par parcelle et un jardin de devant. Ces
+  clôtures sont déduites, aucune n'est relevée : 1 568 parcelles, 12 km de murets et 7 km de haies.
 - **Des bâtiments au vrai gabarit** : sur les emprises OpenStreetMap, la hauteur de 72 % des
   bâtiments (73 % de la surface bâtie) est celle mesurée par l'IGN (BD TOPO), 8 % viennent
   d'OpenStreetMap, le reste est estimé. Le matériau des murs et du toit (meulière, brique, pierre,
@@ -145,6 +156,10 @@ tools/            préparation des données (hors jeu)
   fetch-ign.sh      téléchargement des bâtiments de la BD TOPO (IGN) : hauteurs, matériaux, dates
   build-map.mjs     OSM (+ attributs IGN) → public/maps/montreuil.json (graphe, profils en travers, polygones,
                     commerces rattachés à leur façade, stations de métro)
+  fetch-ortho.mjs   téléchargement de la photo aérienne (BD ORTHO de l'IGN) et découpe en dalles de 400 m
+                    → public/ortho (prepare-ortho.py : réduction à 50 cm, ombres éclaircies, emprises
+                    bâties rebouchées, couleur des toits, WebP) et relevé de la végétation
+                    → data/ortho-raw/vegetation.json (jardins et houppiers, relus par build-map.mjs)
   render-map.mjs    rendu 2D de contrôle de la carte
   fetch-assets.sh, prepare-assets.py   textures et ciel Poly Haven
 src/
@@ -168,6 +183,18 @@ dev/              pages de mise au point de modules isolés
 `npm test` lance les tests ; `npm run map:fetch && npm run map:build` régénère la carte
 (il suffit de changer la zone dans `tools/fetch-osm.sh`, `tools/fetch-ign.sh` et `tools/build-map.mjs` pour un autre
 quartier ; sans `data/ign-raw`, la carte se construit quand même, avec des hauteurs estimées).
+`npm run map:ortho` retélécharge la photo aérienne (40 dalles de 400 m à 50 cm, 1,9 Mo dans `public/ortho`,
+avec la couleur du toit de chaque bâtiment) et relève la végétation ; après `map:build`,
+`node tools/fetch-ortho.mjs --prepare` la remet d'accord avec les bâtiments de la carte.
+La carte et la photo se préparent en trois temps, parce que chacune lit l'autre :
+`npm run map:build` (rues et bâtiments), `npm run map:ortho` (photo, couleurs de toit, végétation),
+puis de nouveau `npm run map:build`, qui tire de `data/ortho-raw/vegetation.json` les jardins, les
+clôtures sur rue et les arbres. La chaussée, les trottoirs et les bâtiments ne dépendent pas de ce relevé :
+le deuxième passage ne les change pas. Sans relevé, la carte se construit quand même : jardins déduits du
+bâti, arbres d'OpenStreetMap seuls, pas de clôture. Sans `public/ortho`, le sol et les toits restent
+procéduraux et la console le signale ; un raté de chargement passager est repris (index et couleurs de
+toit relus deux fois, chaque dalle redemandée deux fois).
+`?ortho=non` coupe la photo, `?ortho=calage` la montre seule, chaussée comprise, pour contrôler son alignement.
 
 ## Limites connues
 
@@ -176,6 +203,13 @@ quartier ; sans `data/ign-raw`, la carte se construit quand même, avec des haut
   l'usage de chaque bâtiment sont réels quand la BD TOPO les connaît (le matériau pour un peu moins
   d'un bâtiment sur deux, sinon celui du voisin), mais pas le dessin de sa façade ni la forme exacte
   de son toit. Les églises et les monuments n'ont pas de modèle propre : seule une plaque les nomme.
+- Le sol hors chaussée mêle du relevé et du déduit. Les clôtures des pavillons, leurs portails et les
+  jardins de devant sont inventés à partir de la photo aérienne (où il y a un jardin) : ni leur place
+  exacte, ni leur genre, ni la largeur des parcelles ne sont réels. Les arbres de la photo sont à la
+  bonne place à quelques mètres près, mais leur nombre est plafonné à dix par dalle de 100 m (un bois
+  est donc clairsemé), leur espèce est inconnue et leur hauteur déduite de la largeur du houppier.
+  La photo date du 27 août 2024 : la Croix de Chavaux a été réaménagée depuis, et la chaussée du jeu
+  (OpenStreetMap) n'y est pas celle de la photo, à 3 à 5 m près.
 - Les noms des commerces sont ceux d'OpenStreetMap à la date du téléchargement : une boutique qui a
   changé d'enseigne ou qui n'y figure pas n'est pas à jour dans le jeu. Les bandeaux portent le nom
   en texte, sans logo ; 44 commerces sur 982 n'ont pu être rattachés à aucun mur et 57 n'ont pas de
@@ -195,6 +229,7 @@ quartier ; sans `data/ign-raw`, la carte se construit quand même, avec des haut
 
 - Données cartographiques (rues, emprises des bâtiments, noms des commerces, des arrêts et des stations) © les contributeurs d'[OpenStreetMap](https://www.openstreetmap.org/copyright), licence ODbL.
 - Hauteurs, étages, matériaux et dates des bâtiments : IGN – BD TOPO, [Licence Ouverte Etalab 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/).
+- Photographies aériennes (teinte du sol hors chaussée, couleur des toits, relevé des jardins et des arbres) : IGN – BD ORTHO, prise de vue du 27 août 2024, [Licence Ouverte Etalab 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/).
 - Ciel HDR et textures : [Poly Haven](https://polyhaven.com), CC0.
 - Moteur 3D : [three.js](https://threejs.org), licence MIT.
 - Voix du moniteur : synthèse [ElevenLabs](https://elevenlabs.io) (voix « Bastien », modèle multilingue v2).

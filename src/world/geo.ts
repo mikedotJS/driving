@@ -20,6 +20,7 @@ export class GeoBuilder {
     this.pos.push(x, y, z); this.nor.push(nx, ny, nz); this.uv.push(u, v);
     if (this.useColor) this.col.push(r, g, b);
     if (this.extraSize === 3) this.extra.push(e0, e1, e2);
+    else if (this.extraSize === 1) this.extra.push(e0);
     return i;
   }
   tri(a: number, b: number, c: number) { this.idx.push(a, b, c); }
@@ -28,7 +29,8 @@ export class GeoBuilder {
   /**
    * Polygone horizontal (anneau extérieur + trous, coordonnées x,z à plat) à l'altitude y,
    * face vers le haut. UV = coordonnées monde × uvScale. `layer` : couche de la texture tableau,
-   * quand le polygone est versé dans un lot de façades (attribut libre = u, v, couche).
+   * quand le polygone est versé dans un lot de façades (attribut libre = u, v, couche). Dans un lot à
+   * attribut libre d'une seule valeur (poids de la photo aérienne sur le sol), `layer` est cette valeur.
    */
   polygon(outer: ArrayLike<number>, holes: ArrayLike<number>[], y: number, uvScale: number, ox = 0, oz = 0, scale = 1, r = 1, g = 1, b = 1, layer = 0) {
     const flat: number[] = [];
@@ -39,7 +41,8 @@ export class GeoBuilder {
     const base = this.vertexCount;
     for (let i = 0; i < flat.length; i += 2) {
       const x = ox + flat[i] * scale, z = oz + flat[i + 1] * scale;
-      this.vertex(x, y, z, 0, 1, 0, x * uvScale, z * uvScale, r, g, b, x * uvScale, z * uvScale, layer);
+      if (this.extraSize === 1) this.vertex(x, y, z, 0, 1, 0, x * uvScale, z * uvScale, r, g, b, layer);
+      else this.vertex(x, y, z, 0, 1, 0, x * uvScale, z * uvScale, r, g, b, x * uvScale, z * uvScale, layer);
     }
     for (let i = 0; i < tris.length; i += 3) {
       const a = tris[i], bb = tris[i + 1], c = tris[i + 2];

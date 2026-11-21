@@ -8,6 +8,7 @@ import { Sky } from '../render/sun';
 import { PlayerView, VIEW_LABELS } from '../render/view';
 import { TrafficView } from '../render/traffic-view';
 import { City } from '../world/city';
+import { Ortho, lireIndex, lireToits } from '../world/ortho';
 import { Ground } from '../world/ground';
 import { Props } from '../world/props';
 import { ParkedCars } from '../world/parked';
@@ -121,10 +122,16 @@ export class Game implements MenuHost {
     progress(0.55, 'Mise en place de la signalisation…');
     await tick();
     this.ground = new Ground(map);
-    this.city = new City(this.net, this.mats);
+    // photo aérienne du sol : ?ortho=non la coupe, ?ortho=calage la montre seule, chaussée comprise
+    const pOrtho = new URLSearchParams(location.search).get('ortho');
+    const ixOrtho = pOrtho === 'non' ? null : await lireIndex();
+    const ortho = ixOrtho ? new Ortho(ixOrtho, {
+      mineral: this.mats.sidewalk, vegetal: this.mats.grass, pave: this.mats.plaza, uni: this.mats.uni, toit: this.mats.roof, chaussee: this.mats.road, moyennes: this.mats.moyennes,
+    }, { calage: pOrtho === 'calage', toits: await lireToits(ixOrtho, map.buildings.length), envoyer: (t) => this.renderer.initTexture(t), anisotropie: Math.min(4, this.renderer.capabilities.getMaxAnisotropy()) }) : null;
+    this.city = new City(this.net, this.mats, ortho);
     this.props = new Props(this.net, this.mats, this.ground, this.city.enseignes);
     this.parked = new ParkedCars(this.net);
-    this.city.decorators.push((k, g, textes) => this.props.populateChunk(k, g, textes), (k, g) => this.parked.populateChunk(k, g));
+    this.city.decorators.push((k, g, textes, uni) => this.props.populateChunk(k, g, textes, uni), (k, g) => this.parked.populateChunk(k, g));
     this.scene.add(this.city.group, this.props.group);
     for (const p of this.props.posts) {
       const k = (Math.floor(p.x / 16) + 4096) * 8192 + Math.floor(p.z / 16) + 4096;
@@ -302,6 +309,8 @@ export class Game implements MenuHost {
       this.view.mirrorsEnabled = s.mirrors && this.perfLevel < 3;
       this.view.mirrorRate = s.quality === 'haute' ? 3 : 1;
     }
+    // photo aérienne du sol : coupée en qualité basse (mémoire vidéo et téléchargements épargnés)
+    if (this.city?.ortho) this.city.ortho.active = s.quality !== 'basse';
     this.viewRadius = (s.quality === 'haute' ? 380 : s.quality === 'moyenne' ? 300 : 220) * [1, 0.82, 0.68, 0.58][this.perfLevel];
     if (this.renderer) this.applyPixelRatio(), this.renderer.setSize(innerWidth, innerHeight, false);
     if (this.traffic) {
@@ -685,6 +694,7 @@ export class Game implements MenuHost {
     this.trafficView.update(this.state === 'pause' ? 0 : dt);
     this.props.update(this.traffic.time);
     this.city.update(fx, fz, this.viewRadius, 4);
+    this.props.voirArbres(fx, fz, this.viewRadius);
     this.sky.update(fx, fz);
     if (this.state === 'drive') this.view.renderMirrors();
     this.renderer.render(this.scene, this.view.camera);

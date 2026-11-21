@@ -119,6 +119,13 @@ const W = +(process.env.W || 640), H = +(process.env.H || 360);
       // ── stabilisation : toutes les dalles construites, programmes compilés ──
       let n = 0;
       do { await nextFrame(); n++; } while ((g.city.pending.length > 0 || n < 4) && n < 80);
+      // photo aérienne du sol : dalles chargées et fondu terminé avant de mesurer
+      const ortho = g.city.ortho && g.city.ortho.active ? g.city.ortho : null;
+      if (ortho) {
+        await ortho.pretes();
+        const t = performance.now();
+        while (performance.now() - t < 900) await nextFrame();
+      }
       hookAll();
       // ── mesure sur 6 images (un cycle complet des cascades d'ombre) ──
       const images = [];
@@ -163,6 +170,7 @@ const W = +(process.env.W || 640), H = +(process.env.H || 360);
         camera: { x: +cam.position.x.toFixed(1), y: +cam.position.y.toFixed(1), z: +cam.position.z.toFixed(1) },
         circulation: { vehicules: g.traffic.vehicles.filter((v) => v.alive !== false).length, pietons: g.traffic.pedestrians.filter((p) => p.alive !== false).length },
         memoire: { geometries: info.memory.geometries, textures: info.memory.textures, programmes: info.programs.length },
+        photoSol: ortho ? { dalles: ortho.mesures.chargees, octets: ortho.mesures.octets } : null,
         dalles: { construites: dalles, visibles: dallesVisibles, maillagesDansDallesVisibles: maillages },
         charge, images, png,
       };
